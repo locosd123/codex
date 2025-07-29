@@ -85,6 +85,29 @@ def file_lock():
 
 logging.basicConfig(level=logging.INFO)
 
+MAX_TG_LEN = 4096
+
+def split_text(text: str, limit: int = MAX_TG_LEN) -> list[str]:
+    """Yield chunks of text that fit within Telegram message limits."""
+    parts = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut == -1:
+            cut = limit
+        parts.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    if text:
+        parts.append(text)
+    return parts
+
+async def reply_split(message, text: str, **kwargs) -> None:
+    for part in split_text(text):
+        await message.reply_text(part, **kwargs)
+
+async def send_split(bot, chat_id: int, text: str, **kwargs) -> None:
+    for part in split_text(text):
+        await bot.send_message(chat_id=chat_id, text=part, **kwargs)
+
 # Defaults for the filter prompt are defined before the dataclass so the
 # attributes can use them directly without a NameError.
 DEFAULT_PROMPT_YES = (
@@ -529,8 +552,11 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "9. <b>Очистить чат</b> — бот удалит все сообщения в этом диалоге.\n"
             "10. Кнопка ⏹ <b>Остановить</b> прерывает любой текущий парсинг.\n"
         )
-        await update.message.reply_text(
-            instruction, reply_markup=MAIN_KB, parse_mode=tg_const.ParseMode.HTML
+        await reply_split(
+            update.message,
+            instruction,
+            reply_markup=MAIN_KB,
+            parse_mode=tg_const.ParseMode.HTML,
         )
         return
 
@@ -660,7 +686,8 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if text == "📝 Заменить фильтр-промпт":
         ctx.user_data.clear()
         ctx.user_data["mode"] = "replace_prompt_yes"
-        await update.message.reply_text(
+        await reply_split(
+            update.message,
             "Вот текущий промпт:\n"
             "Отвечай только 'yes' или 'no'.\n"
             f"'Yes' — {cfg.prompt_yes}\n"
