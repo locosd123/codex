@@ -15,7 +15,7 @@ filters them using OpenAI, and reposts approved content.
 
 The bot reads API keys and tokens from environment variables:
 
-- `OPENAI_API_KEY` – OpenAI API key
+- `OPENAI_API_KEY` – default OpenAI API key
 - `TELEGRAM_BOT_TOKEN` – Telegram bot token
 - `TG_API_ID` – Telegram API ID
 - `TG_API_HASH` – Telegram API hash
@@ -32,3 +32,6 @@ python main.py
 
 The bot stores its state in `processed_ids.json` and uses `seo_news_session.session`
 for the Telethon client session.
+
+Each Telegram user is asked for their `OPENAI_API_KEY` the first time they interact
+with the bot. Keys are stored in `OPENAI_API_KEY.lock` per user.

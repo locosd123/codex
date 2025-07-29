@@ -40,6 +40,7 @@ TG_API_HASH = os.getenv("TG_API_HASH", "")
 
 
 PROCESSED_FILE = Path("processed_ids.json")
+KEY_FILE = Path("OPENAI_API_KEY.lock")
 PROCESSED_LIMIT = 1000
 CONCURRENCY = 5
 MODEL_NAME     = "o3-mini"
@@ -50,7 +51,7 @@ ATTEMPT_MSG    = (
 )
 
 # ────────────── ГЛОБАЛЬНЫЕ КЛИЕНТЫ ─────────────────────────────────────────
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 tg_client     = TelegramClient(
     "seo_news_session", TG_API_ID, TG_API_HASH, timeout=10
 )
@@ -128,6 +129,7 @@ class ChatConfig:
         return build_filter_prompt(self.prompt_yes, self.prompt_no)
 
 ALL_CHATS: dict[str, ChatConfig] = {}
+OPENAI_KEYS: dict[str, str] = load_keys()
 
 async def log(ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     cfg = get_cfg(ctx)
@@ -147,6 +149,24 @@ def build_filter_prompt(p_yes: str, p_no: str) -> str:
         f"'Yes' — {p_yes} "
         f"'No' — {p_no}"
     )
+
+def load_keys() -> dict[str, str]:
+    data: dict[str, str] = {}
+    if KEY_FILE.exists():
+        try:
+            with open(KEY_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                data = {str(k): str(v) for k, v in raw.items()}
+        except Exception:
+            logging.exception("Failed to read API keys")
+    return data
+
+def save_keys(keys: dict[str, str]) -> None:
+    tmp = KEY_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(keys, f, ensure_ascii=False, indent=2)
+    tmp.replace(KEY_FILE)
 
 def load_data() -> dict[str, ChatConfig]:
     """Load per-chat settings from ``processed_ids.json``."""
@@ -225,6 +245,16 @@ def task_running(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(t) and not t.done()
 
 
+CLIENT_CACHE: dict[str, OpenAI] = {}
+
+def get_openai_client(ctx: ContextTypes.DEFAULT_TYPE) -> OpenAI:
+    chat_id = str(ctx.chat_data.get("chat_id", ctx.chat_data.get("target_chat")))
+    key = OPENAI_KEYS.get(chat_id, OPENAI_API_KEY)
+    if key not in CLIENT_CACHE:
+        CLIENT_CACHE[key] = OpenAI(api_key=key)
+    return CLIENT_CACHE[key]
+
+
 def launch_task(ctx: ContextTypes.DEFAULT_TYPE, coro) -> None:
     task = ctx.application.create_task(coro)
     ctx.chat_data["task"] = task
@@ -253,7 +283,7 @@ async def clear_history(
 
 # ────────────── AI helpers ─────────────────────────────────────────────────
 
-async def ai_check(cfg: ChatConfig, text: str) -> tuple[bool, str | None]:
+async def ai_check(ctx: ContextTypes.DEFAULT_TYPE, cfg: ChatConfig, text: str) -> tuple[bool, str | None]:
     """Return ``(True, None)`` if the text is relevant.
 
     If the answer is "NO" and logging is enabled, also request a short
@@ -265,14 +295,15 @@ async def ai_check(cfg: ChatConfig, text: str) -> tuple[bool, str | None]:
         {"role": "system", "content": cfg.filter_prompt()},
         {"role": "user", "content": text[:4000]},
     ]
-    rsp = await openai_call(openai_client.chat.completions.create, model=MODEL_NAME, messages=base)
+    client = get_openai_client(ctx)
+    rsp = await openai_call(client.chat.completions.create, model=MODEL_NAME, messages=base)
     answer = rsp.choices[0].message.content.strip()
     ok = answer.lower().startswith("y")
     reason = None
 
     if not ok and cfg.log_enabled:
         rsp2 = await openai_call(
-            openai_client.chat.completions.create,
+            client.chat.completions.create,
             model=MODEL_NAME,
             messages=base
             + [
@@ -284,9 +315,10 @@ async def ai_check(cfg: ChatConfig, text: str) -> tuple[bool, str | None]:
 
     return ok, reason
 
-async def paraphrase(text: str) -> str:
+async def paraphrase(ctx: ContextTypes.DEFAULT_TYPE, text: str) -> str:
+    client = get_openai_client(ctx)
     rsp = await openai_call(
-        openai_client.chat.completions.create,
+        client.chat.completions.create,
         model=MODEL_NAME,
         messages=[
             {"role": "system",
@@ -355,7 +387,7 @@ async def process_and_send(
         await log(ctx, f"Пропускаю {msg.id}: уже обработан")
         return False
     await log(ctx, f"Проверяю пост {msg.id} из {chan}")
-    ai_ok, reason = await ai_check(cfg, msg.text)
+    ai_ok, reason = await ai_check(ctx, cfg, msg.text)
     if ctx.chat_data.get("stop"):
         return False
     await log(ctx, f"AI ответ для {msg.id}: {'YES' if ai_ok else 'NO'}")
@@ -368,7 +400,7 @@ async def process_and_send(
     if ctx.chat_data.get("stop"):
         return False
     await log(ctx, f"Перефразируем пост {msg.id}")
-    rewritten = html.escape(await paraphrase(msg.text))
+    rewritten = html.escape(await paraphrase(ctx, msg.text))
     if ctx.chat_data.get("stop"):
         return False
     username = getattr(msg.chat, "username", None) or chan.lstrip("@")
@@ -502,6 +534,13 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.chat_data["chat_id"] = chat_id
     ctx.chat_data["start_id"] = update.message.message_id
     get_cfg(ctx)  # ensure config exists
+    if chat_id not in OPENAI_KEYS:
+        ctx.user_data["mode"] = "enter_key"
+        await update.message.reply_text(
+            "Отправьте ваш OPENAI_API_KEY:",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
     await update.message.reply_text("Выберите действие:", reply_markup=MAIN_KB)
 
 
@@ -515,6 +554,15 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.chat_data.setdefault("start_id", update.message.message_id)
     cfg = get_cfg(ctx)
     mode = ctx.user_data.get("mode")
+
+    if mode == "enter_key":
+        OPENAI_KEYS[str(ctx.chat_data.get("chat_id"))] = text
+        save_keys(OPENAI_KEYS)
+        ctx.user_data.clear()
+        await update.message.reply_text(
+            "Ключ сохранён.", reply_markup=MAIN_KB
+        )
+        return
 
     if text == "Отмена":
         ctx.user_data.clear()
