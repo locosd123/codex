@@ -51,7 +51,6 @@ ATTEMPT_MSG    = (
 )
 
 # ────────────── ГЛОБАЛЬНЫЕ КЛИЕНТЫ ─────────────────────────────────────────
-openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 tg_client     = TelegramClient(
     "seo_news_session", TG_API_ID, TG_API_HASH, timeout=10
 )
@@ -115,6 +114,7 @@ DEFAULT_PROMPT_YES = (
     "текст действительно полезен (кейсы, стратегии, апдейты, арбитраж…)"
 )
 DEFAULT_PROMPT_NO = "реклама, эфир, подкаст, мерч, вакансии, мем, оффтоп."
+
 
 
 @dataclass
@@ -500,6 +500,7 @@ SETTINGS_KB = ReplyKeyboardMarkup(
         ["🗑 Очистить историю ID"],
         ["Отображать лог ?"],
         ["📝 Заменить фильтр-промпт"],
+        ["🔑 Заменить OPENAI_API_KEY"],
         ["Отмена"],
     ],
     resize_keyboard=True,
@@ -744,6 +745,14 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(
             "Введите промпт в случае если YES:", reply_markup=CANCEL_KB
+        )
+        return
+    if text == "🔑 Заменить OPENAI_API_KEY":
+        ctx.user_data.clear()
+        ctx.user_data["mode"] = "enter_key"
+        await update.message.reply_text(
+            "Отправьте новый OPENAI_API_KEY:",
+            reply_markup=ReplyKeyboardRemove(),
         )
         return
     if text == "Отображать лог ?":

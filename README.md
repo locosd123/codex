@@ -35,3 +35,5 @@ for the Telethon client session.
 
 Each Telegram user is asked for their `OPENAI_API_KEY` the first time they interact
 with the bot. Keys are stored in `OPENAI_API_KEY.lock` per user.
+You can change the key later via the "Заменить OPENAI_API_KEY" option in the bot's
+settings.
