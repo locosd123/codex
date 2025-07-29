@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import asyncio
 import logging
+import os
 try:
     import fcntl  # POSIX locking
 except ModuleNotFoundError:  # pragma: no cover - Windows fallback
@@ -32,10 +33,10 @@ from telethon.tl.types import Message
 from openai import OpenAI
 
 # ────────────── КОНФИГ ─────────────────────────────────────────────────────
-OPENAI_API_KEY = "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"
-TELEGRAM_BOT_TOKEN   = "7621000604:AAHrWFyNx8JCrPkCtmtC4MWAV2Ri5-EpOQo"
-TG_API_ID     = "408198196"
-TG_API_HASH = "fe7151ae181d6fb73c854dd5d6242cd"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TG_API_ID = int(os.getenv("TG_API_ID", "0")) if os.getenv("TG_API_ID") else 0
+TG_API_HASH = os.getenv("TG_API_HASH", "")
 
 
 PROCESSED_FILE = Path("processed_ids.json")
