@@ -108,6 +108,24 @@ async def send_split(bot, chat_id: int, text: str, **kwargs) -> None:
     for part in split_text(text):
         await bot.send_message(chat_id=chat_id, text=part, **kwargs)
 
+def load_keys() -> dict[str, str]:
+    data: dict[str, str] = {}
+    if KEY_FILE.exists():
+        try:
+            with open(KEY_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                data = {str(k): str(v) for k, v in raw.items()}
+        except Exception:
+            logging.exception("Failed to read API keys")
+    return data
+
+def save_keys(keys: dict[str, str]) -> None:
+    tmp = KEY_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(keys, f, ensure_ascii=False, indent=2)
+    tmp.replace(KEY_FILE)
+
 # Defaults for the filter prompt are defined before the dataclass so the
 # attributes can use them directly without a NameError.
 DEFAULT_PROMPT_YES = (
@@ -149,24 +167,6 @@ def build_filter_prompt(p_yes: str, p_no: str) -> str:
         f"'Yes' — {p_yes} "
         f"'No' — {p_no}"
     )
-
-def load_keys() -> dict[str, str]:
-    data: dict[str, str] = {}
-    if KEY_FILE.exists():
-        try:
-            with open(KEY_FILE, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                data = {str(k): str(v) for k, v in raw.items()}
-        except Exception:
-            logging.exception("Failed to read API keys")
-    return data
-
-def save_keys(keys: dict[str, str]) -> None:
-    tmp = KEY_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(keys, f, ensure_ascii=False, indent=2)
-    tmp.replace(KEY_FILE)
 
 def load_data() -> dict[str, ChatConfig]:
     """Load per-chat settings from ``processed_ids.json``."""
