@@ -129,7 +129,9 @@ COMFYUI_URL = "http://127.0.0.1:8188"
 COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint_example.json")
 COMFYUI_MAX_RETRIES = 3
 COMFYUI_POLL_INTERVAL = 2
-COMFYUI_POLL_ATTEMPTS = 30
+# Увеличено время ожидания результата до ~10 минут на картинку
+# (300 попыток по 2 секунды каждая)
+COMFYUI_POLL_ATTEMPTS = 300
 
 script_dir = application_path
 images_dir = os.path.join(script_dir, "Images")
