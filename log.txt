@@ -1,0 +1,76 @@
+--- Log started at 2025-05-09 02:32:47 ---
+2025-05-09 02:32:47 - INFO - Инициализация приложения...
+2025-05-09 02:32:47 - INFO - Загружено 9 папок из настроек.
+2025-05-09 02:32:47 - INFO - Создание GUI для 9 загруженных папок...
+2025-05-09 02:32:48 - INFO - Приложение готово к работе.
+2025-05-09 02:32:51 - INFO - --- Начало процесса генерации ---
+2025-05-09 02:32:51 - INFO - Настройки сохранены.
+2025-05-09 02:32:51 - INFO - Режим: Сортировка по папкам
+2025-05-09 02:32:51 - INFO - Найдено 1 отмеченных папок. Создано 5 задач.
+2025-05-09 02:32:51 - INFO - Запуск 5 задач в 1 потоках...
+2025-05-09 02:32:51 - INFO - Задача folder_Main_1 (Папка: Main): Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp (Попытка worker 1)
+2025-05-09 02:32:51 - INFO - Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp
+2025-05-09 02:32:52 - INFO - URL успешно скачан (прямой запрос): C:\Users\maxdl\pythonProject17\Images\download_dizajn-bez-nazvaniya-66png_18312_1746747172.webp
+2025-05-09 02:32:52 - INFO - Задача folder_Main_1 (Папка: Main): Изображение конвертировано в JPEG: download_dizajn-bez-nazvaniya-66png_18312_1746747172_converted_folder_Main_1_w1_1746747172.jpg
+2025-05-09 02:32:52 - INFO - Задача folder_Main_1 (Папка: Main): Data URI создан (длина: 52683).
+2025-05-09 02:32:52 - INFO - Задача folder_Main_1 (Папка: Main): Запрос к Together.ai Chat для улучшения промпта...
+2025-05-09 02:32:55 - INFO - Задача folder_Main_1 (Папка: Main): Получен промпт от Together.ai Chat (длина 1258).
+2025-05-09 02:32:55 - INFO - Задача folder_Main_1 (Папка: Main): Финальный промпт для FLUX.1-schnell (длина 1522): Masterpiece, best quality, ultra-detailed, intricate details, sharp focus, high resolution, bright-cartoon 3D style. Maintain the same main character while varying their position and location. Emphasi...
+2025-05-09 02:32:55 - INFO - Задача folder_Main_1 (Папка: Main): Отправка промпта в FLUX.1-schnell...
+2025-05-09 02:32:55 - INFO - FLUX.1-schnell: Попытка 1/4, задержка 1.00 сек...
+2025-05-09 02:33:41 - INFO - FLUX.1-schnell: Изображение успешно сгенерировано (попытка 1).
+2025-05-09 02:33:41 - INFO - FLUX.1-schnell: Семафор освобожден (попытка 1)
+2025-05-09 02:33:41 - INFO - Задача folder_Main_1 (Папка: Main): Сгенерировано изображение (base64, длина: 46152).
+2025-05-09 02:33:41 - INFO - Задача folder_Main_1 (Папка: Main): Сохранение в: C:/Users/maxdl/Downloads\Main\1_1.png
+2025-05-09 02:33:41 - INFO - Задача folder_Main_1 (Папка: Main): Успешно сохранено: C:/Users/maxdl/Downloads\Main\1_1.png
+2025-05-09 02:33:41 - INFO - Временный файл удален: download_dizajn-bez-nazvaniya-66png_18312_1746747172.webp
+2025-05-09 02:33:41 - INFO - Временный файл удален: download_dizajn-bez-nazvaniya-66png_18312_1746747172_converted_folder_Main_1_w1_1746747172.jpg
+2025-05-09 02:33:41 - INFO - Задача folder_Main_2 (Папка: Main): Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp (Попытка worker 1)
+2025-05-09 02:33:41 - INFO - Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp
+2025-05-09 02:33:41 - INFO - Задача folder_Main_1 завершена успешно (1/5 обработано).
+2025-05-09 02:33:42 - INFO - URL успешно скачан (прямой запрос): C:\Users\maxdl\pythonProject17\Images\download_dizajn-bez-nazvaniya-66png_18312_1746747222.webp
+2025-05-09 02:33:42 - INFO - Задача folder_Main_2 (Папка: Main): Изображение конвертировано в JPEG: download_dizajn-bez-nazvaniya-66png_18312_1746747222_converted_folder_Main_2_w1_1746747222.jpg
+2025-05-09 02:33:42 - INFO - Задача folder_Main_2 (Папка: Main): Data URI создан (длина: 52683).
+2025-05-09 02:33:42 - INFO - Задача folder_Main_2 (Папка: Main): Запрос к Together.ai Chat для улучшения промпта...
+2025-05-09 02:33:45 - INFO - Задача folder_Main_2 (Папка: Main): Получен промпт от Together.ai Chat (длина 762).
+2025-05-09 02:33:45 - INFO - Задача folder_Main_2 (Папка: Main): Финальный промпт для FLUX.1-schnell (длина 1045): Masterpiece, best quality, ultra-detailed, intricate details, sharp focus, high resolution, bright-cartoon 3D style. Keep the main character identical but change their location and pose for each promp...
+2025-05-09 02:33:45 - INFO - Задача folder_Main_2 (Папка: Main): Отправка промпта в FLUX.1-schnell...
+2025-05-09 02:33:45 - INFO - FLUX.1-schnell: Попытка 1/4, задержка 1.00 сек...
+2025-05-09 02:34:14 - INFO - FLUX.1-schnell: Изображение успешно сгенерировано (попытка 1).
+2025-05-09 02:34:14 - INFO - FLUX.1-schnell: Семафор освобожден (попытка 1)
+2025-05-09 02:34:14 - INFO - Задача folder_Main_2 (Папка: Main): Сгенерировано изображение (base64, длина: 31768).
+2025-05-09 02:34:14 - INFO - Задача folder_Main_2 (Папка: Main): Сохранение в: C:/Users/maxdl/Downloads\Main\2_2.png
+2025-05-09 02:34:14 - INFO - Задача folder_Main_2 (Папка: Main): Успешно сохранено: C:/Users/maxdl/Downloads\Main\2_2.png
+2025-05-09 02:34:14 - INFO - Временный файл удален: download_dizajn-bez-nazvaniya-66png_18312_1746747222.webp
+2025-05-09 02:34:14 - INFO - Временный файл удален: download_dizajn-bez-nazvaniya-66png_18312_1746747222_converted_folder_Main_2_w1_1746747222.jpg
+2025-05-09 02:34:14 - INFO - Задача folder_Main_3 (Папка: Main): Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp (Попытка worker 1)
+2025-05-09 02:34:14 - INFO - Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp
+2025-05-09 02:34:14 - INFO - Задача folder_Main_2 завершена успешно (2/5 обработано).
+2025-05-09 02:34:14 - INFO - URL успешно скачан (прямой запрос): C:\Users\maxdl\pythonProject17\Images\download_dizajn-bez-nazvaniya-66png_18312_1746747254.webp
+2025-05-09 02:34:14 - INFO - Задача folder_Main_3 (Папка: Main): Изображение конвертировано в JPEG: download_dizajn-bez-nazvaniya-66png_18312_1746747254_converted_folder_Main_3_w1_1746747254.jpg
+2025-05-09 02:34:14 - INFO - Задача folder_Main_3 (Папка: Main): Data URI создан (длина: 52683).
+2025-05-09 02:34:14 - INFO - Задача folder_Main_3 (Папка: Main): Запрос к Together.ai Chat для улучшения промпта...
+2025-05-09 02:34:18 - INFO - Задача folder_Main_3 (Папка: Main): Получен промпт от Together.ai Chat (длина 1582).
+2025-05-09 02:34:18 - INFO - Задача folder_Main_3 (Папка: Main): Финальный промпт для FLUX.1-schnell (длина 1846): Masterpiece, best quality, ultra-detailed, intricate details, sharp focus, high resolution, bright-cartoon 3D style. Maintain the same main character while varying their position and location. Emphasi...
+2025-05-09 02:34:18 - INFO - Задача folder_Main_3 (Папка: Main): Отправка промпта в FLUX.1-schnell...
+2025-05-09 02:34:18 - INFO - FLUX.1-schnell: Попытка 1/4, задержка 1.00 сек...
+2025-05-09 02:34:56 - INFO - FLUX.1-schnell: Изображение успешно сгенерировано (попытка 1).
+2025-05-09 02:34:56 - INFO - FLUX.1-schnell: Семафор освобожден (попытка 1)
+2025-05-09 02:34:56 - INFO - Задача folder_Main_3 (Папка: Main): Сгенерировано изображение (base64, длина: 33280).
+2025-05-09 02:34:56 - INFO - Задача folder_Main_3 (Папка: Main): Сохранение в: C:/Users/maxdl/Downloads\Main\3_3.png
+2025-05-09 02:34:56 - INFO - Задача folder_Main_3 (Папка: Main): Успешно сохранено: C:/Users/maxdl/Downloads\Main\3_3.png
+2025-05-09 02:34:56 - INFO - Временный файл удален: download_dizajn-bez-nazvaniya-66png_18312_1746747254.webp
+2025-05-09 02:34:56 - INFO - Временный файл удален: download_dizajn-bez-nazvaniya-66png_18312_1746747254_converted_folder_Main_3_w1_1746747254.jpg
+2025-05-09 02:34:56 - INFO - Задача folder_Main_4 (Папка: Main): Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp (Попытка worker 1)
+2025-05-09 02:34:56 - INFO - Загрузка изображения из: https://affbox.media/wp-content/uploads/cwv-webp-images/2024/04/dizajn-bez-nazvaniya-66.png.webp
+2025-05-09 02:34:56 - INFO - Задача folder_Main_3 завершена успешно (3/5 обработано).
+2025-05-09 02:34:56 - INFO - URL успешно скачан (прямой запрос): C:\Users\maxdl\pythonProject17\Images\download_dizajn-bez-nazvaniya-66png_18312_1746747297.webp
+2025-05-09 02:34:56 - INFO - Задача folder_Main_4 (Папка: Main): Изображение конвертировано в JPEG: download_dizajn-bez-nazvaniya-66png_18312_1746747297_converted_folder_Main_4_w1_1746747296.jpg
+2025-05-09 02:34:56 - INFO - Задача folder_Main_4 (Папка: Main): Data URI создан (длина: 52683).
+2025-05-09 02:34:56 - INFO - Задача folder_Main_4 (Папка: Main): Запрос к Together.ai Chat для улучшения промпта...
+2025-05-09 02:34:58 - INFO - Задача folder_Main_4 (Папка: Main): Получен промпт от Together.ai Chat (длина 804).
+2025-05-09 02:34:58 - INFO - Задача folder_Main_4 (Папка: Main): Финальный промпт для FLUX.1-schnell (длина 1079): Masterpiece, best quality, ultra-detailed, intricate details, sharp focus, high resolution, bright-cartoon 3D style. Ensure the background is unique, the main character remains consistent, and the sce...
+2025-05-09 02:34:58 - INFO - Задача folder_Main_4 (Папка: Main): Отправка промпта в FLUX.1-schnell...
+2025-05-09 02:34:58 - INFO - FLUX.1-schnell: Попытка 1/4, задержка 1.00 сек...
+2025-05-09 02:35:03 - WARNING - --- Получен запрос на остановку генерации ---
+2025-05-09 02:35:03 - INFO - --- Сигнал остановки отправлен потокам ---
