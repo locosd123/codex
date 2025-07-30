@@ -87,6 +87,14 @@ FLUX_IMAGE_STEPS = 12  # Уменьшено до 12 для баланса ско
 FLUX_IMAGE_N = 1
 SEED_NUMBER = 1
 
+# --- Константы для Leonardo AI ---
+LEONARDO_API_URL = "https://cloud.leonardo.ai/api/rest/v1"
+LEONARDO_IMAGE_WIDTH = 1024
+LEONARDO_IMAGE_HEIGHT = 576
+LEONARDO_IMAGE_STEPS = 20
+LEONARDO_POLL_DELAY = 2.0
+LEONARDO_MAX_POLLS = 30
+
 DEFAULT_NEGATIVE_PROMPT = (
     "ugly, tiling, poorly drawn hands, poorly drawn feet, poorly drawn face, out of frame, extra limbs, disfigured, deformed, body out of frame, "
     "blurry, bad anatomy, blurred, watermark, grainy, signature, cut off, draft, low quality, jpeg artifacts, noisy, weird colors, "
@@ -280,6 +288,7 @@ def save_settings():
 
     cfg = {
         "together_api": entry_together.get().strip(),
+        "leonardo_api": entry_leonardo.get().strip(),
         "save_dir": entry_save_dir.get().strip(),
         "threads": threads_value,
         "default_image_url": entry_url_default.get().strip(),
@@ -442,10 +451,58 @@ def call_flux_schnell_with_retry(prompt: str, together_key: str):
         raise RuntimeError(error_msg)
 
 
+# --- Функция для генерации изображений через Leonardo AI ---
+def call_leonardo_with_retry(prompt: str, leonardo_key: str):
+    if stop_requested.is_set():
+        raise RuntimeError("Генерация Leonardo AI прервана пользователем перед запросом.")
+
+    headers = {
+        "Authorization": f"Bearer {leonardo_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "prompt": prompt,
+        "width": LEONARDO_IMAGE_WIDTH,
+        "height": LEONARDO_IMAGE_HEIGHT,
+        "num_images": 1,
+        "num_inference_steps": LEONARDO_IMAGE_STEPS,
+    }
+
+    try:
+        resp = requests.post(f"{LEONARDO_API_URL}/generations", headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        job = resp.json().get("sdGenerationJob", {})
+        gen_id = job.get("generationId")
+        if not gen_id:
+            raise RuntimeError("Leonardo API не вернул идентификатор генерации.")
+
+        poll_url = f"{LEONARDO_API_URL}/generations/{gen_id}"
+        for _ in range(LEONARDO_MAX_POLLS):
+            if stop_requested.is_set():
+                raise RuntimeError("Генерация Leonardo AI прервана пользователем во время ожидания.")
+            poll_resp = requests.get(poll_url, headers=headers, timeout=60)
+            poll_resp.raise_for_status()
+            data = poll_resp.json()
+            status = data.get("generations_by_pk", {}).get("status")
+            if status == "COMPLETE":
+                images = data.get("generations_by_pk", {}).get("generated_images", [])
+                if images:
+                    img_url = images[0].get("url")
+                    if img_url:
+                        img_resp = requests.get(img_url, timeout=60)
+                        img_resp.raise_for_status()
+                        return base64.b64encode(img_resp.content).decode()
+                break
+            time.sleep(LEONARDO_POLL_DELAY)
+        raise RuntimeError("Leonardo API: превышено время ожидания результата.")
+    except Exception as e:
+        raise RuntimeError(f"Leonardo API error: {e}") from e
+
 # --- Функция рабочего потока ---
 def worker(task_id, task_data):
     image_path_or_url = task_data['image_path_or_url']
-    together_key = task_data['together_key']
+    together_key = task_data.get('together_key')
+    leonardo_key = task_data.get('leonardo_key')
     target_save_dir = task_data['save_dir']
     names_list = task_data['names_list']
     is_folder_task = task_data.get('is_folder_task', False)
@@ -463,9 +520,15 @@ def worker(task_id, task_data):
             if stop_requested.is_set():
                 raise RuntimeError("Задача прервана пользователем перед началом.")
 
-            if not together_key:
-                raise ValueError(f"{log_prefix} Отсутствует API ключ Together AI.")
-            if not TOGETHER_AVAILABLE:
+            use_together = bool(together_key)
+            use_leonardo = bool(leonardo_key)
+
+            if not use_together and not use_leonardo:
+                raise ValueError(f"{log_prefix} Не указан API ключ для генерации.")
+            if use_together and use_leonardo:
+                raise ValueError(f"{log_prefix} Укажите только один API ключ (Leonardo или Together).")
+
+            if use_together and not TOGETHER_AVAILABLE:
                 raise ImportError(f"{log_prefix} Библиотека 'together' не установлена.")
 
             # Шаг 1: Получение исходного изображения
@@ -499,47 +562,49 @@ def worker(task_id, task_data):
             data_uri = f"data:image/jpeg;base64,{b64_string}"
             log_message(f"{log_prefix} Data URI создан (длина: {len(data_uri)}).", level=logging.DEBUG)
 
-            if stop_requested.is_set():
-                raise RuntimeError("Задача прервана пользователем перед запросом к Together.ai Chat.")
+            if use_together:
+                if stop_requested.is_set():
+                    raise RuntimeError("Задача прервана пользователем перед запросом к Together.ai Chat.")
 
-            # Шаг 3: Получение улучшенного промпта
-            log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
-            chat_client = Together(api_key=together_key)
-            # Добавим таймаут и обработку ошибок для Chat API
-            try:
-                resp_chat = chat_client.chat.completions.create(
-                    model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
-                    messages=[{"role": "user", "content": [{"type": "text", "text": PROMPT},
-                                                           {"type": "image_url", "image_url": {"url": data_uri}}]}],
-                    stream=False,
-                    max_tokens=1024  # Ограничим длину ответа на всякий случай
-                    # TODO: Добавить request_timeout если библиотека его поддерживает
-                )
-                if not resp_chat.choices:  # Проверка на пустой ответ
-                    raise ValueError("Chat API вернул ответ без 'choices'.")
-                together_prompt_content = resp_chat.choices[0].message.content.strip()
-                if not together_prompt_content:
-                    raise ValueError("Chat API вернул пустое сообщение в 'choices'.")
-                log_message(f"{log_prefix} Получен промпт от Together.ai Chat (длина {len(together_prompt_content)}).")
-            except Exception as chat_err:
-                log_message(f"{log_prefix} Ошибка при запросе к Together.ai Chat: {chat_err}", level=logging.ERROR)
-                raise RuntimeError(
-                    f"Ошибка получения промпта от Chat API: {chat_err}") from chat_err  # Пробрасываем как ошибку worker
+                # Шаг 3: Получение улучшенного промпта через Together Chat
+                log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
+                chat_client = Together(api_key=together_key)
+                try:
+                    resp_chat = chat_client.chat.completions.create(
+                        model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
+                        messages=[{"role": "user", "content": [{"type": "text", "text": PROMPT},
+                                                               {"type": "image_url", "image_url": {"url": data_uri}}]}],
+                        stream=False,
+                        max_tokens=1024
+                    )
+                    if not resp_chat.choices:
+                        raise ValueError("Chat API вернул ответ без 'choices'.")
+                    together_prompt_content = resp_chat.choices[0].message.content.strip()
+                    if not together_prompt_content:
+                        raise ValueError("Chat API вернул пустое сообщение в 'choices'.")
+                    log_message(f"{log_prefix} Получен промпт от Together.ai Chat (длина {len(together_prompt_content)}).")
+                except Exception as chat_err:
+                    log_message(f"{log_prefix} Ошибка при запросе к Together.ai Chat: {chat_err}", level=logging.ERROR)
+                    raise RuntimeError(
+                        f"Ошибка получения промпта от Chat API: {chat_err}") from chat_err
 
-            # Шаг 4: Формирование финального промпта
-            selected_prefix = random.choice(DEFAULT_PREFIXES)
-            final_prompt_for_image = selected_prefix + together_prompt_content
-            log_message(
-                f"{log_prefix} Финальный промпт для FLUX.1-schnell (длина {len(final_prompt_for_image)}): {final_prompt_for_image[:200]}...",
-                level=logging.DEBUG)
+                # Шаг 4: Формирование финального промпта
+                selected_prefix = random.choice(DEFAULT_PREFIXES)
+                final_prompt_for_image = selected_prefix + together_prompt_content
+                log_message(
+                    f"{log_prefix} Финальный промпт для FLUX.1-schnell (длина {len(final_prompt_for_image)}): {final_prompt_for_image[:200]}...",
+                    level=logging.DEBUG)
 
-            if stop_requested.is_set():
-                raise RuntimeError("Задача прервана пользователем перед запросом к FLUX.1-schnell.")
+                if stop_requested.is_set():
+                    raise RuntimeError("Задача прервана пользователем перед запросом к FLUX.1-schnell.")
 
-            # Шаг 5: Генерация изображения
-            log_message(f"{log_prefix} Отправка промпта в FLUX.1-schnell...")
-            # call_flux_schnell_with_retry уже содержит свою логику ретраев для API
-            b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, together_key)
+                log_message(f"{log_prefix} Отправка промпта в FLUX.1-schnell...")
+                b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, together_key)
+            else:
+                # Используем Leonardo AI для генерации
+                final_prompt_for_image = PROMPT
+                log_message(f"{log_prefix} Отправка промпта в Leonardo AI...")
+                b64_image_data = call_leonardo_with_retry(final_prompt_for_image, leonardo_key)
 
             if not b64_image_data:  # Дополнительная проверка, хотя call_flux... должен вызвать исключение
                 raise RuntimeError(f"{log_prefix} FLUX.1-schnell не вернул данные изображения после ретраев API.")
@@ -900,11 +965,15 @@ def generate_thread():
         return
 
     together_key = cfg.get("together_api")
+    leonardo_key = cfg.get("leonardo_api")
     main_save_dir = cfg.get("save_dir")
     threads_str = cfg.get("threads", "1")
 
     errors = []
-    if not together_key: errors.append("Требуется Together AI API Key.")
+    if not together_key and not leonardo_key:
+        errors.append("Требуется указать Leonardo AI Key или Together AI Key.")
+    if together_key and leonardo_key:
+        errors.append("Заполните только одну строку API ключа.")
     if not main_save_dir:
         errors.append("Требуется указать основную папку для сохранения.")
     # Проверка существования и доступности папки сохранения
@@ -954,6 +1023,7 @@ def generate_thread():
                     'task_id': f"default_{task_counter}",
                     'image_path_or_url': default_url,
                     'together_key': together_key,
+                    'leonardo_key': leonardo_key,
                     'save_dir': main_save_dir,  # Сохраняем в основную папку
                     'names_list': [current_name],  # Передаем одно имя для этого задания
                     'is_folder_task': False
@@ -1024,6 +1094,7 @@ def generate_thread():
                             'task_id': f"folder_{folder_name_val}_{task_counter}",
                             'image_path_or_url': folder_url_val,
                             'together_key': together_key,
+                            'leonardo_key': leonardo_key,
                             'save_dir': target_folder_dir_val,  # Путь к подпапке
                             'names_list': [current_name],  # Передаем одно имя для этого задания
                             'is_folder_task': True,
@@ -1443,6 +1514,12 @@ ctk.CTkLabel(together_frame, text="Together AI Key:").pack(side="left", padx=(0,
 entry_together = ctk.CTkEntry(together_frame, placeholder_text="Введите ваш ключ от Together AI...", show="*")
 entry_together.pack(side="left", fill="x", expand=True)
 
+leonardo_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
+leonardo_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+ctk.CTkLabel(leonardo_frame, text="Leonardo AI Key:").pack(side="left", padx=(0, 5))
+entry_leonardo = ctk.CTkEntry(leonardo_frame, placeholder_text="Введите ваш ключ от Leonardo AI...", show="*")
+entry_leonardo.pack(side="left", fill="x", expand=True)
+
 frame_dir = ctk.CTkFrame(common_settings_frame)
 frame_dir.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
 frame_dir.grid_columnconfigure(1, weight=1)
@@ -1532,6 +1609,7 @@ folder_data = []
 settings = load_settings()  # Загружает данные в глобальный folder_data
 
 entry_together.insert(0, settings.get("together_api", ""))
+entry_leonardo.insert(0, settings.get("leonardo_api", ""))
 entry_save_dir.insert(0, settings.get("save_dir", ""))
 if entry_threads and entry_threads.winfo_exists():
     entry_threads.insert(0, settings.get("threads", "1"))
