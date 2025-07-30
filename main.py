@@ -157,6 +157,28 @@ def get_chromedriver_path() -> str:
         return driver_name
 
 
+def update_chromedriver() -> str:
+    """Force update of ChromeDriver using webdriver_manager."""
+    try:
+        driver_install_path = os.path.join(application_path, "chromedriver_cache")
+        os.makedirs(driver_install_path, exist_ok=True)
+        downloaded = ChromeDriverManager(path=driver_install_path, cache_valid_range=0).install()
+        if os.path.abspath(downloaded) != os.path.abspath(driver_path):
+            try:
+                shutil.copy(downloaded, driver_path)
+                log_message(f"ChromeDriver обновлен в: {driver_path}", level=logging.INFO)
+            except Exception as copy_err:
+                log_message(
+                    f"Не удалось скопировать обновленный ChromeDriver в {driver_path}: {copy_err}. Используется путь: {downloaded}",
+                    level=logging.WARNING,
+                )
+                return downloaded
+        return driver_path
+    except Exception as e:
+        log_message(f"Ошибка обновления ChromeDriver: {e}", level=logging.ERROR)
+        return driver_path
+
+
 # --- Настройка логирования ---
 try:
     with open(LOG_FILE, "w", encoding='utf-8') as f:
@@ -888,15 +910,26 @@ def fetch_image(path_or_url: str) -> str:
                 try:
                     service = ChromeService(executable_path=get_chromedriver_path())
                     driver = webdriver.Chrome(service=service, options=opts)
-                    # Установим таймаут загрузки страницы
                     driver.set_page_load_timeout(45)
                 except WebDriverException as wd_err:
                     log_message(f"Ошибка инициализации WebDriver: {wd_err}", level=logging.ERROR)
-                    if "executable needs to be in PATH" in str(wd_err):
+                    msg = str(wd_err)
+                    if "only supports Chrome version" in msg or "Current browser version" in msg:
+                        log_message("Обнаружено несоответствие версии ChromeDriver. Пытаемся обновить...", level=logging.WARNING)
+                        update_chromedriver()
+                        try:
+                            service = ChromeService(executable_path=get_chromedriver_path())
+                            driver = webdriver.Chrome(service=service, options=opts)
+                            driver.set_page_load_timeout(45)
+                            log_message("ChromeDriver успешно обновлен.")
+                        except WebDriverException as wd_err2:
+                            log_message(f"Не удалось обновить ChromeDriver: {wd_err2}", level=logging.ERROR)
+                            raise
+                    elif "executable needs to be in PATH" in msg:
                         raise WebDriverException(
                             f"ChromeDriver не найден в PATH.\nУстановите ChromeDriver или укажите путь к нему.\nОшибка: {wd_err}") from wd_err
                     else:
-                        raise  # Перебрасываем другие ошибки WebDriver
+                        raise
 
                 try:
                     driver.get(path_or_url)
