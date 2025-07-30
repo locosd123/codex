@@ -124,6 +124,13 @@ LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
 LMSTUDIO_MODEL = "llava-phi-3-mini"
 LMSTUDIO_MAX_RETRIES = 3
 
+# --- Константы для локального ComfyUI ---
+COMFYUI_URL = "http://127.0.0.1:8188"
+COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint_example.json")
+COMFYUI_MAX_RETRIES = 3
+COMFYUI_POLL_INTERVAL = 2
+COMFYUI_POLL_ATTEMPTS = 30
+
 script_dir = application_path
 images_dir = os.path.join(script_dir, "Images")
 os.makedirs(images_dir, exist_ok=True)
@@ -498,9 +505,6 @@ def call_flux_schnell_with_retry(prompt: str, together_key: str):
     return call_flux_with_retry(prompt, together_key, FLUX_SCHNELL_MODEL_NAME)
 
 
-def call_flux_dev_with_retry(prompt: str, together_key: str):
-    return call_flux_with_retry(prompt, together_key, FLUX_DEV_MODEL_NAME)
-
 
 # --- Функция для API Leonardo AI ---
 def call_leonardo_with_retry(prompt: str, leonardo_key: str):
@@ -558,6 +562,74 @@ def call_leonardo_with_retry(prompt: str, leonardo_key: str):
             log_message(f"Leonardo AI: ошибка на попытке {attempt + 1}: {e}", level=logging.ERROR)
             time.sleep(2 * (attempt + 1))
     raise RuntimeError(f"Leonardo AI: не удалось сгенерировать изображение. Последняя ошибка: {last_exc}")
+
+
+# --- Функция для локального ComfyUI (FLUX DEV) ---
+def call_comfyui_flux_dev_with_retry(prompt: str):
+    if stop_requested.is_set():
+        raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
+
+    try:
+        with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
+            workflow = json.load(wf)
+    except Exception as e:
+        raise RuntimeError(f"Не удалось загрузить workflow ComfyUI: {e}") from e
+
+    def _replace_prompt(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, str) and ("__PROMPT__" in v or "{{prompt}}" in v):
+                    obj[k] = v.replace("__PROMPT__", prompt).replace("{{prompt}}", prompt)
+                else:
+                    _replace_prompt(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _replace_prompt(item)
+
+    workflow_copy = copy.deepcopy(workflow)
+    _replace_prompt(workflow_copy)
+
+    client_id = f"codex_{int(time.time()*1000)}_{random.randint(0,9999)}"
+    payload = {"prompt": workflow_copy, "client_id": client_id}
+
+    last_exc = None
+    for attempt in range(COMFYUI_MAX_RETRIES):
+        try:
+            if stop_requested.is_set():
+                raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
+            log_message(f"ComfyUI: попытка {attempt + 1}/{COMFYUI_MAX_RETRIES} отправки запроса...")
+            resp = requests.post(f"{COMFYUI_URL}/prompt", json=payload, timeout=60)
+            resp.raise_for_status()
+            resp_data = resp.json()
+            prompt_id = resp_data.get("prompt_id")
+            if not prompt_id:
+                raise RuntimeError("ComfyUI не вернул prompt_id")
+
+            for _ in range(COMFYUI_POLL_ATTEMPTS):
+                if stop_requested.is_set():
+                    raise RuntimeError("Генерация ComfyUI прервана пользователем во время ожидания результата.")
+                hist_resp = requests.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=60)
+                hist_resp.raise_for_status()
+                hist = hist_resp.json()
+                images = hist.get("images") or {}
+                for node_imgs in images.values():
+                    if node_imgs:
+                        info = node_imgs[0]
+                        params = {
+                            "filename": info.get("filename"),
+                            "subfolder": info.get("subfolder", ""),
+                            "type": info.get("type", "output"),
+                        }
+                        img_resp = requests.get(f"{COMFYUI_URL}/view", params=params, timeout=60)
+                        img_resp.raise_for_status()
+                        return base64.b64encode(img_resp.content).decode("utf-8")
+                time.sleep(COMFYUI_POLL_INTERVAL)
+            raise RuntimeError("Истекло время ожидания результата ComfyUI.")
+        except Exception as e:
+            last_exc = e
+            log_message(f"ComfyUI: ошибка на попытке {attempt + 1}: {e}", level=logging.ERROR)
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"ComfyUI: не удалось сгенерировать изображение. Последняя ошибка: {last_exc}")
 
 
 # --- Функция для локального LM Studio ---
@@ -634,9 +706,11 @@ def worker(task_id, task_data):
             elif prompt_provider != 'lmstudio':
                 raise ValueError(f"{log_prefix} Неизвестный источник промпта: {prompt_provider}")
 
-            if provider.startswith('flux'):
+            if provider == 'flux_schnell':
                 if not image_key:
                     raise ValueError(f"{log_prefix} Отсутствует API ключ Together (image).")
+            elif provider == 'flux_dev':
+                pass  # локальная генерация через ComfyUI, ключ не требуется
             elif provider == 'leonardo':
                 if not leonardo_key:
                     raise ValueError(f"{log_prefix} Отсутствует API ключ Leonardo AI.")
@@ -721,8 +795,8 @@ def worker(task_id, task_data):
                 log_message(f"{log_prefix} Отправка промпта в FLUX.1-schnell...")
                 b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, image_key)
             elif provider == 'flux_dev':
-                log_message(f"{log_prefix} Отправка промпта в FLUX.1-dev...")
-                b64_image_data = call_flux_dev_with_retry(final_prompt_for_image, image_key)
+                log_message(f"{log_prefix} Отправка промпта в локальный ComfyUI (FLUX DEV)...")
+                b64_image_data = call_comfyui_flux_dev_with_retry(final_prompt_for_image)
             else:
                 log_message(f"{log_prefix} Отправка промпта в Leonardo.ai...")
                 b64_image_data = call_leonardo_with_retry(final_prompt_for_image, leonardo_key)
@@ -1109,8 +1183,8 @@ def generate_thread():
     if using_flux:
         if leonardo_key:
             errors.append("Нельзя одновременно использовать FLUX и Leonardo AI.")
-        if not together_image_key:
-            errors.append("Нужен Together Image ключ для FLUX.")
+        if flux_model == "schnell" and not together_image_key:
+            errors.append("Нужен Together Image ключ для FLUX.schnell.")
         if prompt_source == 'together' and not together_prompt_key:
             errors.append("Нужен Together Prompt ключ для FLUX.")
     else:
@@ -1727,7 +1801,7 @@ def _on_flux_toggle(model):
 
 checkbox_flux_schnell = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 Schnell ($0.003)", variable=flux_schnell_var, command=lambda: _on_flux_toggle('schnell'))
 checkbox_flux_schnell.grid(row=1, column=0, sticky="w", padx=(5, 2))
-checkbox_flux_dev = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 [dev] ($0.025)", variable=flux_dev_var, command=lambda: _on_flux_toggle('dev'))
+checkbox_flux_dev = ctk.CTkCheckBox(together_image_frame, text="FLUX DEV (ComfyUI)", variable=flux_dev_var, command=lambda: _on_flux_toggle('dev'))
 checkbox_flux_dev.grid(row=1, column=1, sticky="w", padx=(5, 0))
 
 leonardo_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
