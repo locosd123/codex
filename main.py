@@ -132,6 +132,8 @@ COMFYUI_POLL_INTERVAL = 2
 # Увеличено время ожидания результата до ~10 минут на картинку
 # (300 попыток по 2 секунды каждая)
 COMFYUI_POLL_ATTEMPTS = 300
+# Таймаут в секундах для HTTP-запросов к локальному ComfyUI
+COMFYUI_REQUEST_TIMEOUT = 180
 
 script_dir = application_path
 images_dir = os.path.join(script_dir, "Images")
@@ -186,6 +188,15 @@ def update_chromedriver() -> str:
     except Exception as e:
         log_message(f"Ошибка обновления ChromeDriver: {e}", level=logging.ERROR)
         return driver_path
+
+
+def check_comfyui_server() -> bool:
+    """Return True if local ComfyUI server responds, False otherwise."""
+    try:
+        resp = requests.get(f"{COMFYUI_URL}/queue", timeout=5)
+        return resp.status_code == 200
+    except Exception:
+        return False
 
 
 # --- Настройка логирования ---
@@ -595,12 +606,22 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
     payload = {"prompt": workflow_copy, "client_id": client_id}
 
     last_exc = None
+    if not check_comfyui_server():
+        raise RuntimeError(
+            f"ComfyUI сервер недоступен по адресу {COMFYUI_URL}. "
+            "Убедитесь, что ComfyUI запущен."
+        )
+
     for attempt in range(COMFYUI_MAX_RETRIES):
         try:
             if stop_requested.is_set():
                 raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
             log_message(f"ComfyUI: попытка {attempt + 1}/{COMFYUI_MAX_RETRIES} отправки запроса...")
-            resp = requests.post(f"{COMFYUI_URL}/prompt", json=payload, timeout=60)
+            resp = requests.post(
+                f"{COMFYUI_URL}/prompt",
+                json=payload,
+                timeout=COMFYUI_REQUEST_TIMEOUT,
+            )
             resp.raise_for_status()
             resp_data = resp.json()
             prompt_id = resp_data.get("prompt_id")
@@ -610,7 +631,9 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
             for _ in range(COMFYUI_POLL_ATTEMPTS):
                 if stop_requested.is_set():
                     raise RuntimeError("Генерация ComfyUI прервана пользователем во время ожидания результата.")
-                hist_resp = requests.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=60)
+                hist_resp = requests.get(
+                    f"{COMFYUI_URL}/history/{prompt_id}", timeout=COMFYUI_REQUEST_TIMEOUT
+                )
                 hist_resp.raise_for_status()
                 hist = hist_resp.json()
                 images = hist.get("images") or {}
@@ -622,7 +645,11 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
                             "subfolder": info.get("subfolder", ""),
                             "type": info.get("type", "output"),
                         }
-                        img_resp = requests.get(f"{COMFYUI_URL}/view", params=params, timeout=60)
+                        img_resp = requests.get(
+                            f"{COMFYUI_URL}/view",
+                            params=params,
+                            timeout=COMFYUI_REQUEST_TIMEOUT,
+                        )
                         img_resp.raise_for_status()
                         return base64.b64encode(img_resp.content).decode("utf-8")
                 time.sleep(COMFYUI_POLL_INTERVAL)
