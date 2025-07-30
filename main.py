@@ -79,6 +79,11 @@ DEFAULT_PREFIXES = [
 ]
 DEFAULT_PREFIXES_LEN = len(DEFAULT_PREFIXES)
 
+# Суффикс для дополнительной четкости изображения
+SHARP_PROMPT_SUFFIX = (
+    " Ensure the final image is perfectly sharp, high definition, and crisp, with no blurriness."
+)
+
 # --- НОВЫЕ КОНСТАНТЫ для FLUX моделей ---
 FLUX_SCHNELL_MODEL_NAME = "black-forest-labs/FLUX.1-schnell"
 FLUX_DEV_MODEL_NAME = "black-forest-labs/FLUX.1-dev"
@@ -620,7 +625,9 @@ def worker(task_id, task_data):
 
             # Шаг 4: Формирование финального промпта
             selected_prefix = random.choice(DEFAULT_PREFIXES)
-            final_prompt_for_image = selected_prefix + together_prompt_content
+            final_prompt_for_image = (
+                selected_prefix + together_prompt_content + SHARP_PROMPT_SUFFIX
+            )
             log_message(
                 f"{log_prefix} Финальный промпт (длина {len(final_prompt_for_image)}): {final_prompt_for_image[:200]}...",
                 level=logging.DEBUG)
@@ -1601,9 +1608,9 @@ def _on_flux_toggle(model):
         flux_schnell_var.set(0)
 
 checkbox_flux_schnell = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 Schnell ($0.003)", variable=flux_schnell_var, command=lambda: _on_flux_toggle('schnell'))
-checkbox_flux_schnell.grid(row=1, column=0, sticky="w")
+checkbox_flux_schnell.grid(row=1, column=0, sticky="w", padx=(5, 2))
 checkbox_flux_dev = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 [dev] ($0.025)", variable=flux_dev_var, command=lambda: _on_flux_toggle('dev'))
-checkbox_flux_dev.grid(row=1, column=1, sticky="w")
+checkbox_flux_dev.grid(row=1, column=1, sticky="w", padx=(5, 0))
 
 leonardo_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
 leonardo_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
