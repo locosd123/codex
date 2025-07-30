@@ -79,8 +79,9 @@ DEFAULT_PREFIXES = [
 ]
 DEFAULT_PREFIXES_LEN = len(DEFAULT_PREFIXES)
 
-# --- НОВЫЕ КОНСТАНТЫ для FLUX.1-schnell ---
-FLUX_MODEL_NAME = "black-forest-labs/FLUX.1-schnell"
+# --- НОВЫЕ КОНСТАНТЫ для FLUX моделей ---
+FLUX_SCHNELL_MODEL_NAME = "black-forest-labs/FLUX.1-schnell"
+FLUX_DEV_MODEL_NAME = "black-forest-labs/FLUX.1-dev"
 FLUX_IMAGE_WIDTH  = 1024
 FLUX_IMAGE_HEIGHT = 576
 FLUX_IMAGE_STEPS = 12  # Уменьшено до 12 для баланса скорости и качества (можно вернуть 20 если нужно)
@@ -234,7 +235,7 @@ def load_settings():
 
 def save_settings():
     global folder_data, app
-    if not app or not entry_together.winfo_exists():
+    if not app or not entry_together_prompt.winfo_exists() or not entry_together_image.winfo_exists():
         log_message("Попытка сохранить настройки до полной инициализации GUI. Пропуск.", level=logging.WARNING)
         return {}
 
@@ -285,9 +286,18 @@ def save_settings():
     if entry_threads and entry_threads.winfo_exists():
         threads_value = entry_threads.get().strip()
 
+    if flux_dev_var.get():
+        flux_model = "dev"
+    elif flux_schnell_var.get():
+        flux_model = "schnell"
+    else:
+        flux_model = "none"
+
     cfg = {
-        "together_api": entry_together.get().strip(),
+        "together_prompt_api": entry_together_prompt.get().strip(),
+        "together_image_api": entry_together_image.get().strip(),
         "leonardo_api": entry_leonardo.get().strip(),
+        "flux_model": flux_model,
         "save_dir": entry_save_dir.get().strip(),
         "threads": threads_value,
         "default_image_url": entry_url_default.get().strip(),
@@ -343,36 +353,36 @@ def cleanup_temp_files(*files):
                             level=logging.WARNING)
 
 
-# --- Функция для API FLUX.1-schnell ---
-def call_flux_schnell_with_retry(prompt: str, together_key: str):
+# --- Универсальная функция для API FLUX (schnell/dev) ---
+def call_flux_with_retry(prompt: str, together_key: str, model_name: str):
     if stop_requested.is_set():
-        raise RuntimeError("Генерация FLUX.1-schnell прервана пользователем перед запросом.")
+        raise RuntimeError("Генерация FLUX прервана пользователем перед запросом.")
 
     last_exception = None
     for attempt in range(FLUX_MAX_RETRIES):
         if stop_requested.is_set():
             raise RuntimeError(
-                f"Генерация FLUX.1-schnell прервана пользователем во время ожидания (попытка {attempt + 1}).")
+                f"Генерация FLUX ({model_name}) прервана пользователем во время ожидания (попытка {attempt + 1}).")
 
         acquired = flux_semaphore.acquire(timeout=60)
         if not acquired:
-            last_exception = TimeoutError("Timeout waiting for FLUX.1-schnell semaphore")
-            log_message(f"FLUX.1-schnell: Таймаут ожидания семафора (попытка {attempt + 1})", level=logging.WARNING)
+            last_exception = TimeoutError("Timeout waiting for FLUX semaphore")
+            log_message(f"FLUX ({model_name}): Таймаут ожидания семафора (попытка {attempt + 1})", level=logging.WARNING)
             continue
 
         try:
             delay = FLUX_BASE_DELAY * (2 ** attempt)
-            log_message(f"FLUX.1-schnell: Попытка {attempt + 1}/{FLUX_MAX_RETRIES}, задержка {delay:.2f} сек...")
+            log_message(f"FLUX ({model_name}): Попытка {attempt + 1}/{FLUX_MAX_RETRIES}, задержка {delay:.2f} сек...")
 
             time.sleep(min(delay, 1.0))
             if stop_requested.is_set():
                 raise RuntimeError(
-                    f"Генерация FLUX.1-schnell прервана пользователем перед запросом (попытка {attempt + 1}).")
+                    f"Генерация FLUX ({model_name}) прервана пользователем перед запросом (попытка {attempt + 1}).")
 
             client = Together(api_key=together_key)
             response = client.images.generate(
                 prompt=prompt,
-                model=FLUX_MODEL_NAME,
+                model=model_name,
                 negative_prompt=DEFAULT_NEGATIVE_PROMPT,  # Добавлено
                 width=FLUX_IMAGE_WIDTH,
                 height=FLUX_IMAGE_HEIGHT,
@@ -383,14 +393,14 @@ def call_flux_schnell_with_retry(prompt: str, together_key: str):
             )
 
             if response and response.data and len(response.data) > 0 and response.data[0].b64_json:
-                log_message(f"FLUX.1-schnell: Изображение успешно сгенерировано (попытка {attempt + 1}).")
+                log_message(f"FLUX ({model_name}): Изображение успешно сгенерировано (попытка {attempt + 1}).")
                 return response.data[0].b64_json
             else:
                 # Попытка получить детали ошибки из ответа, если они есть
                 error_detail = getattr(response, 'error', str(response))
-                log_message(f"FLUX.1-schnell: Некорректный ответ от API (попытка {attempt + 1}): {error_detail}",
+                log_message(f"FLUX ({model_name}): Некорректный ответ от API (попытка {attempt + 1}): {error_detail}",
                             level=logging.ERROR)
-                last_exception = RuntimeError(f"FLUX.1-schnell: API returned unexpected response: {error_detail}")
+                last_exception = RuntimeError(f"FLUX API returned unexpected response: {error_detail}")
                 # Можно добавить break, если ответ явно указывает на неповторяемую ошибку
 
         except requests.exceptions.HTTPError as http_err:
@@ -405,31 +415,31 @@ def call_flux_schnell_with_retry(prompt: str, together_key: str):
                 error_type = ''
 
             log_message(
-                f"FLUX.1-schnell: HTTP ошибка {status_code}: {error_text} (Type: {error_type}, Попытка {attempt + 1}).",
+                f"FLUX ({model_name}): HTTP ошибка {status_code}: {error_text} (Type: {error_type}, Попытка {attempt + 1}).",
                 level=logging.ERROR)
             last_exception = http_err
 
             # --- ИСПРАВЛЕНО: Обработка NSFW ошибки ---
             if status_code == 422 and "nsfw content" in error_text.lower():
-                log_message(f"FLUX.1-schnell: Ошибка 422 (NSFW): {error_text}. Промпт: {prompt[:100]}...",
+                log_message(f"FLUX ({model_name}): Ошибка 422 (NSFW): {error_text}. Промпт: {prompt[:100]}...",
                             level=logging.WARNING)
                 break  # Прерываем ретраи для этой ошибки
             # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             elif status_code == 400:  # Bad Request (например, невалидный параметр)
-                log_message(f"FLUX.1-schnell: Ошибка 400 Bad Request: {error_text}. Промпт: {prompt[:100]}...",
+                log_message(f"FLUX ({model_name}): Ошибка 400 Bad Request: {error_text}. Промпт: {prompt[:100]}...",
                             level=logging.ERROR)
                 break  # Не повторяем при 400 (не Rate Limit)
             elif status_code == 429 or (status_code and status_code >= 500):  # Rate Limit или Серверная ошибка
-                log_message(f"FLUX.1-schnell: Ошибка {status_code}, повтор...", level=logging.WARNING)
+                log_message(f"FLUX ({model_name}): Ошибка {status_code}, повтор...", level=logging.WARNING)
                 # Продолжаем цикл (неявный continue)
             else:  # Другие HTTP ошибки
                 break  # Не повторяем
         except requests.exceptions.RequestException as req_err:
-            log_message(f"FLUX.1-schnell: Ошибка сети или запроса (попытка {attempt + 1}): {req_err}",
+            log_message(f"FLUX ({model_name}): Ошибка сети или запроса (попытка {attempt + 1}): {req_err}",
                         level=logging.ERROR)
             last_exception = req_err
         except Exception as e:  # Другие непредвиденные ошибки (например, от библиотеки Together)
-            log_message(f"FLUX.1-schnell: Непредвиденная ошибка (попытка {attempt + 1}): {type(e).__name__} - {e}",
+            log_message(f"FLUX ({model_name}): Непредвиденная ошибка (попытка {attempt + 1}): {type(e).__name__} - {e}",
                         level=logging.CRITICAL)
             logging.exception("Traceback непредвиденной ошибки FLUX:")
             last_exception = e
@@ -437,10 +447,10 @@ def call_flux_schnell_with_retry(prompt: str, together_key: str):
         finally:
             if acquired:  # Освобождаем семафор только если он был захвачен
                 flux_semaphore.release()
-                log_message(f"FLUX.1-schnell: Семафор освобожден (попытка {attempt + 1})", level=logging.DEBUG)
+                log_message(f"FLUX ({model_name}): Семафор освобожден (попытка {attempt + 1})", level=logging.DEBUG)
 
     # Выход из цикла ретраев
-    error_msg = "FLUX.1-schnell: Не удалось сгенерировать изображение после всех попыток."
+    error_msg = f"FLUX ({model_name}): Не удалось сгенерировать изображение после всех попыток."
     if last_exception:
         # Передаем последнюю ошибку для более детального логгирования в worker
         raise RuntimeError(
@@ -448,6 +458,14 @@ def call_flux_schnell_with_retry(prompt: str, together_key: str):
     else:
         # Если вышли из цикла без исключений, но и без результата (маловероятно, но возможно)
         raise RuntimeError(error_msg)
+
+
+def call_flux_schnell_with_retry(prompt: str, together_key: str):
+    return call_flux_with_retry(prompt, together_key, FLUX_SCHNELL_MODEL_NAME)
+
+
+def call_flux_dev_with_retry(prompt: str, together_key: str):
+    return call_flux_with_retry(prompt, together_key, FLUX_DEV_MODEL_NAME)
 
 
 # --- Функция для API Leonardo AI ---
@@ -511,8 +529,9 @@ def call_leonardo_with_retry(prompt: str, leonardo_key: str):
 # --- Функция рабочего потока ---
 def worker(task_id, task_data):
     image_path_or_url = task_data['image_path_or_url']
-    provider = task_data.get('provider', 'together')
-    together_key = task_data.get('together_key', '')
+    provider = task_data.get('provider', 'flux_schnell')
+    prompt_key = task_data.get('prompt_key', '')
+    image_key = task_data.get('image_key', '')
     leonardo_key = task_data.get('leonardo_key', '')
     target_save_dir = task_data['save_dir']
     names_list = task_data['names_list']
@@ -531,9 +550,11 @@ def worker(task_id, task_data):
             if stop_requested.is_set():
                 raise RuntimeError("Задача прервана пользователем перед началом.")
 
-            if provider == 'together':
-                if not together_key:
-                    raise ValueError(f"{log_prefix} Отсутствует API ключ Together AI.")
+            if provider.startswith('flux'):
+                if not prompt_key:
+                    raise ValueError(f"{log_prefix} Отсутствует API ключ Together (prompt).")
+                if not image_key:
+                    raise ValueError(f"{log_prefix} Отсутствует API ключ Together (image).")
                 if not TOGETHER_AVAILABLE:
                     raise ImportError(f"{log_prefix} Библиотека 'together' не установлена.")
             else:
@@ -575,9 +596,9 @@ def worker(task_id, task_data):
                 raise RuntimeError("Задача прервана пользователем перед запросом к Together.ai Chat.")
 
             together_prompt_content = PROMPT
-            if provider == 'together':
+            if provider.startswith('flux'):
                 log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
-                chat_client = Together(api_key=together_key)
+                chat_client = Together(api_key=prompt_key)
                 try:
                     resp_chat = chat_client.chat.completions.create(
                         model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
@@ -608,9 +629,12 @@ def worker(task_id, task_data):
                 raise RuntimeError("Задача прервана пользователем перед генерацией изображения.")
 
             # Шаг 5: Генерация изображения
-            if provider == 'together':
+            if provider == 'flux_schnell':
                 log_message(f"{log_prefix} Отправка промпта в FLUX.1-schnell...")
-                b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, together_key)
+                b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, image_key)
+            elif provider == 'flux_dev':
+                log_message(f"{log_prefix} Отправка промпта в FLUX.1-dev...")
+                b64_image_data = call_flux_dev_with_retry(final_prompt_for_image, image_key)
             else:
                 log_message(f"{log_prefix} Отправка промпта в Leonardo.ai...")
                 b64_image_data = call_leonardo_with_retry(final_prompt_for_image, leonardo_key)
@@ -973,16 +997,23 @@ def generate_thread():
                     state="normal")
         return
 
-    together_key = cfg.get("together_api")
+    together_prompt_key = cfg.get("together_prompt_api")
+    together_image_key = cfg.get("together_image_api")
+    flux_model = cfg.get("flux_model", "schnell")
     leonardo_key = cfg.get("leonardo_api")
     main_save_dir = cfg.get("save_dir")
     threads_str = cfg.get("threads", "1")
 
     errors = []
-    if together_key and leonardo_key:
-        errors.append("Укажите только один API ключ: Together или Leonardo.")
-    if not together_key and not leonardo_key:
-        errors.append("Требуется API ключ Together или Leonardo.")
+    using_flux = flux_model in ("schnell", "dev")
+    if using_flux:
+        if leonardo_key:
+            errors.append("Нельзя одновременно использовать FLUX и Leonardo AI.")
+        if not together_prompt_key or not together_image_key:
+            errors.append("Нужны Together Prompt и Image ключи для FLUX.")
+    else:
+        if not leonardo_key:
+            errors.append("Требуется ключ Leonardo AI.")
     if not main_save_dir:
         errors.append("Требуется указать основную папку для сохранения.")
     # Проверка существования и доступности папки сохранения
@@ -1028,18 +1059,28 @@ def generate_thread():
                     names_list) else ""
                 current_name = f"{current_name_base}{name_suffix}"
 
-                task_info = {
-                    'task_id': f"default_{task_counter}",
-                    'image_path_or_url': default_url,
-                    'save_dir': main_save_dir,
-                    'names_list': [current_name],
-                    'is_folder_task': False,
-                    'provider': 'together' if together_key else 'leonardo'
-                }
-                if together_key:
-                    task_info['together_key'] = together_key
+                if using_flux:
+                    provider = 'flux_dev' if flux_model == 'dev' else 'flux_schnell'
+                    task_info = {
+                        'task_id': f"default_{task_counter}",
+                        'image_path_or_url': default_url,
+                        'save_dir': main_save_dir,
+                        'names_list': [current_name],
+                        'is_folder_task': False,
+                        'provider': provider,
+                        'prompt_key': together_prompt_key,
+                        'image_key': together_image_key
+                    }
                 else:
-                    task_info['leonardo_key'] = leonardo_key
+                    task_info = {
+                        'task_id': f"default_{task_counter}",
+                        'image_path_or_url': default_url,
+                        'save_dir': main_save_dir,
+                        'names_list': [current_name],
+                        'is_folder_task': False,
+                        'provider': 'leonardo',
+                        'leonardo_key': leonardo_key
+                    }
                 tasks_to_run.append(task_info)
             log_message(f"Создано {len(tasks_to_run)} задач для обычной генерации.")
 
@@ -1103,19 +1144,30 @@ def generate_thread():
 
                         current_name = f"{current_name_base}{name_suffix}"
 
-                        task_info = {
-                            'task_id': f"folder_{folder_name_val}_{task_counter}",
-                            'image_path_or_url': folder_url_val,
-                            'save_dir': target_folder_dir_val,
-                            'names_list': [current_name],
-                            'is_folder_task': True,
-                            'folder_name': folder_name_val,
-                            'provider': 'together' if together_key else 'leonardo'
-                        }
-                        if together_key:
-                            task_info['together_key'] = together_key
+                        if using_flux:
+                            provider = 'flux_dev' if flux_model == 'dev' else 'flux_schnell'
+                            task_info = {
+                                'task_id': f"folder_{folder_name_val}_{task_counter}",
+                                'image_path_or_url': folder_url_val,
+                                'save_dir': target_folder_dir_val,
+                                'names_list': [current_name],
+                                'is_folder_task': True,
+                                'folder_name': folder_name_val,
+                                'provider': provider,
+                                'prompt_key': together_prompt_key,
+                                'image_key': together_image_key
+                            }
                         else:
-                            task_info['leonardo_key'] = leonardo_key
+                            task_info = {
+                                'task_id': f"folder_{folder_name_val}_{task_counter}",
+                                'image_path_or_url': folder_url_val,
+                                'save_dir': target_folder_dir_val,
+                                'names_list': [current_name],
+                                'is_folder_task': True,
+                                'folder_name': folder_name_val,
+                                'provider': 'leonardo',
+                                'leonardo_key': leonardo_key
+                            }
                         tasks_to_run.append(task_info)
             log_message(f"Найдено {checked_folders_count} отмеченных папок. Создано {total_folder_tasks} задач.")
             if not tasks_to_run and checked_folders_count > 0:
@@ -1525,14 +1577,36 @@ common_settings_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
 common_settings_frame.grid_columnconfigure(0, weight=1)
 common_settings_frame.grid_columnconfigure(1, weight=2)
 
-together_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
-together_frame.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
-ctk.CTkLabel(together_frame, text="Together AI Key:").pack(side="left", padx=(0, 5))
-entry_together = ctk.CTkEntry(together_frame, placeholder_text="Введите ваш ключ от Together AI...", show="*")
-entry_together.pack(side="left", fill="x", expand=True)
+
+together_prompt_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
+together_prompt_frame.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+ctk.CTkLabel(together_prompt_frame, text="Together Prompt Key:").pack(side="left", padx=(0, 5))
+entry_together_prompt = ctk.CTkEntry(together_prompt_frame, placeholder_text="Ключ Together для промпта...", show="*")
+entry_together_prompt.pack(side="left", fill="x", expand=True)
+
+together_image_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
+together_image_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+together_image_frame.grid_columnconfigure(1, weight=1)
+ctk.CTkLabel(together_image_frame, text="Together Image Key:").grid(row=0, column=0, padx=(0, 5))
+entry_together_image = ctk.CTkEntry(together_image_frame, placeholder_text="Ключ Together для картинок...", show="*")
+entry_together_image.grid(row=0, column=1, sticky="ew")
+
+flux_schnell_var = ctk.IntVar(value=1)
+flux_dev_var = ctk.IntVar(value=0)
+
+def _on_flux_toggle(model):
+    if model == 'schnell' and flux_schnell_var.get():
+        flux_dev_var.set(0)
+    elif model == 'dev' and flux_dev_var.get():
+        flux_schnell_var.set(0)
+
+checkbox_flux_schnell = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 Schnell ($0.003)", variable=flux_schnell_var, command=lambda: _on_flux_toggle('schnell'))
+checkbox_flux_schnell.grid(row=1, column=0, sticky="w")
+checkbox_flux_dev = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 [dev] ($0.025)", variable=flux_dev_var, command=lambda: _on_flux_toggle('dev'))
+checkbox_flux_dev.grid(row=1, column=1, sticky="w")
 
 leonardo_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
-leonardo_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+leonardo_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
 ctk.CTkLabel(leonardo_frame, text="Leonardo AI Key:").pack(side="left", padx=(0, 5))
 entry_leonardo = ctk.CTkEntry(leonardo_frame, placeholder_text="Введите ваш ключ от Leonardo AI...", show="*")
 entry_leonardo.pack(side="left", fill="x", expand=True)
@@ -1625,7 +1699,11 @@ log_message("Инициализация приложения...")
 folder_data = []
 settings = load_settings()  # Загружает данные в глобальный folder_data
 
-entry_together.insert(0, settings.get("together_api", ""))
+entry_together_prompt.insert(0, settings.get("together_prompt_api", ""))
+entry_together_image.insert(0, settings.get("together_image_api", ""))
+flux_model_loaded = settings.get("flux_model", "schnell")
+flux_schnell_var.set(1 if flux_model_loaded == "schnell" else 0)
+flux_dev_var.set(1 if flux_model_loaded == "dev" else 0)
 entry_leonardo.insert(0, settings.get("leonardo_api", ""))
 entry_save_dir.insert(0, settings.get("save_dir", ""))
 if entry_threads and entry_threads.winfo_exists():
