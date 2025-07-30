@@ -119,6 +119,11 @@ LEONARDO_MAX_RETRIES = 3
 LEONARDO_POLL_INTERVAL = 5
 LEONARDO_POLL_ATTEMPTS = 20
 
+# --- Константы для локального LM Studio ---
+LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
+LMSTUDIO_MODEL = "llava-phi-3-mini"
+LMSTUDIO_MAX_RETRIES = 3
+
 script_dir = application_path
 images_dir = os.path.join(script_dir, "Images")
 os.makedirs(images_dir, exist_ok=True)
@@ -298,10 +303,12 @@ def save_settings():
     else:
         flux_model = "none"
 
+    prompt_source = "lmstudio" if prompt_lmstudio_var.get() else "together"
     cfg = {
         "together_prompt_api": entry_together_prompt.get().strip(),
         "together_image_api": entry_together_image.get().strip(),
         "leonardo_api": entry_leonardo.get().strip(),
+        "prompt_source": prompt_source,
         "flux_model": flux_model,
         "save_dir": entry_save_dir.get().strip(),
         "threads": threads_value,
@@ -531,10 +538,52 @@ def call_leonardo_with_retry(prompt: str, leonardo_key: str):
     raise RuntimeError(f"Leonardo AI: не удалось сгенерировать изображение. Последняя ошибка: {last_exc}")
 
 
+# --- Функция для локального LM Studio ---
+def call_lmstudio_with_retry(data_uri: str):
+    if stop_requested.is_set():
+        raise RuntimeError("Генерация LM Studio прервана пользователем перед запросом.")
+
+    payload = {
+        "model": LMSTUDIO_MODEL,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": PROMPT},
+                {"type": "image_url", "image_url": {"url": data_uri}}
+            ]
+        }],
+        "stream": False,
+        "max_tokens": 1024
+    }
+
+    last_exc = None
+    for attempt in range(LMSTUDIO_MAX_RETRIES):
+        try:
+            if stop_requested.is_set():
+                raise RuntimeError("Генерация LM Studio прервана пользователем перед запросом.")
+            log_message(f"LM Studio: попытка {attempt + 1}/{LMSTUDIO_MAX_RETRIES} отправки запроса...")
+            resp = requests.post(LMSTUDIO_URL, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("choices"):
+                choice = data["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content") or choice.get("content")
+                if content:
+                    return content.strip()
+            raise RuntimeError("LM Studio не вернул валидный ответ.")
+        except Exception as e:
+            last_exc = e
+            log_message(f"LM Studio: ошибка на попытке {attempt + 1}: {e}", level=logging.ERROR)
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"LM Studio: не удалось получить промпт. Последняя ошибка: {last_exc}")
+
+
 # --- Функция рабочего потока ---
 def worker(task_id, task_data):
     image_path_or_url = task_data['image_path_or_url']
     provider = task_data.get('provider', 'flux_schnell')
+    prompt_provider = task_data.get('prompt_provider', 'together')
     prompt_key = task_data.get('prompt_key', '')
     image_key = task_data.get('image_key', '')
     leonardo_key = task_data.get('leonardo_key', '')
@@ -555,16 +604,22 @@ def worker(task_id, task_data):
             if stop_requested.is_set():
                 raise RuntimeError("Задача прервана пользователем перед началом.")
 
-            if provider.startswith('flux'):
+            if prompt_provider == 'together':
                 if not prompt_key:
                     raise ValueError(f"{log_prefix} Отсутствует API ключ Together (prompt).")
-                if not image_key:
-                    raise ValueError(f"{log_prefix} Отсутствует API ключ Together (image).")
                 if not TOGETHER_AVAILABLE:
                     raise ImportError(f"{log_prefix} Библиотека 'together' не установлена.")
-            else:
+            elif prompt_provider != 'lmstudio':
+                raise ValueError(f"{log_prefix} Неизвестный источник промпта: {prompt_provider}")
+
+            if provider.startswith('flux'):
+                if not image_key:
+                    raise ValueError(f"{log_prefix} Отсутствует API ключ Together (image).")
+            elif provider == 'leonardo':
                 if not leonardo_key:
                     raise ValueError(f"{log_prefix} Отсутствует API ключ Leonardo AI.")
+            else:
+                raise ValueError(f"{log_prefix} Неизвестный провайдер изображений: {provider}")
 
             # Шаг 1: Получение исходного изображения
             log_message(f"{log_prefix} Загрузка изображения из: {image_path_or_url} (Попытка worker {attempt})")
@@ -598,30 +653,34 @@ def worker(task_id, task_data):
             log_message(f"{log_prefix} Data URI создан (длина: {len(data_uri)}).", level=logging.DEBUG)
 
             if stop_requested.is_set():
-                raise RuntimeError("Задача прервана пользователем перед запросом к Together.ai Chat.")
+                raise RuntimeError("Задача прервана пользователем перед запросом к сервису промпта.")
 
             together_prompt_content = PROMPT
             if provider.startswith('flux'):
-                log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
-                chat_client = Together(api_key=prompt_key)
-                try:
-                    resp_chat = chat_client.chat.completions.create(
-                        model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
-                        messages=[{"role": "user", "content": [{"type": "text", "text": PROMPT},
-                                                               {"type": "image_url", "image_url": {"url": data_uri}}]}],
-                        stream=False,
-                        max_tokens=1024
-                    )
-                    if not resp_chat.choices:
-                        raise ValueError("Chat API вернул ответ без 'choices'.")
-                    together_prompt_content = resp_chat.choices[0].message.content.strip()
-                    if not together_prompt_content:
-                        raise ValueError("Chat API вернул пустое сообщение в 'choices'.")
-                    log_message(f"{log_prefix} Получен промпт от Together.ai Chat (длина {len(together_prompt_content)}).")
-                except Exception as chat_err:
-                    log_message(f"{log_prefix} Ошибка при запросе к Together.ai Chat: {chat_err}", level=logging.ERROR)
-                    raise RuntimeError(
-                        f"Ошибка получения промпта от Chat API: {chat_err}") from chat_err
+                if prompt_provider == 'together':
+                    log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
+                    chat_client = Together(api_key=prompt_key)
+                    try:
+                        resp_chat = chat_client.chat.completions.create(
+                            model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
+                            messages=[{"role": "user", "content": [{"type": "text", "text": PROMPT},
+                                                                   {"type": "image_url", "image_url": {"url": data_uri}}]}],
+                            stream=False,
+                            max_tokens=1024
+                        )
+                        if not resp_chat.choices:
+                            raise ValueError("Chat API вернул ответ без 'choices'.")
+                        together_prompt_content = resp_chat.choices[0].message.content.strip()
+                        if not together_prompt_content:
+                            raise ValueError("Chat API вернул пустое сообщение в 'choices'.")
+                        log_message(f"{log_prefix} Получен промпт от Together.ai Chat (длина {len(together_prompt_content)}).")
+                    except Exception as chat_err:
+                        log_message(f"{log_prefix} Ошибка при запросе к Together.ai Chat: {chat_err}", level=logging.ERROR)
+                        raise RuntimeError(
+                            f"Ошибка получения промпта от Chat API: {chat_err}") from chat_err
+                else:
+                    log_message(f"{log_prefix} Запрос к локальному LM Studio для улучшения промпта...")
+                    together_prompt_content = call_lmstudio_with_retry(data_uri)
 
             # Шаг 4: Формирование финального промпта
             selected_prefix = random.choice(DEFAULT_PREFIXES)
@@ -1006,6 +1065,7 @@ def generate_thread():
 
     together_prompt_key = cfg.get("together_prompt_api")
     together_image_key = cfg.get("together_image_api")
+    prompt_source = cfg.get("prompt_source", "together")
     flux_model = cfg.get("flux_model", "schnell")
     leonardo_key = cfg.get("leonardo_api")
     main_save_dir = cfg.get("save_dir")
@@ -1016,11 +1076,15 @@ def generate_thread():
     if using_flux:
         if leonardo_key:
             errors.append("Нельзя одновременно использовать FLUX и Leonardo AI.")
-        if not together_prompt_key or not together_image_key:
-            errors.append("Нужны Together Prompt и Image ключи для FLUX.")
+        if not together_image_key:
+            errors.append("Нужен Together Image ключ для FLUX.")
+        if prompt_source == 'together' and not together_prompt_key:
+            errors.append("Нужен Together Prompt ключ для FLUX.")
     else:
         if not leonardo_key:
             errors.append("Требуется ключ Leonardo AI.")
+        if prompt_source == 'together' and not together_prompt_key:
+            errors.append("Требуется Together Prompt Key.")
     if not main_save_dir:
         errors.append("Требуется указать основную папку для сохранения.")
     # Проверка существования и доступности папки сохранения
@@ -1075,6 +1139,7 @@ def generate_thread():
                         'names_list': [current_name],
                         'is_folder_task': False,
                         'provider': provider,
+                        'prompt_provider': prompt_source,
                         'prompt_key': together_prompt_key,
                         'image_key': together_image_key
                     }
@@ -1086,6 +1151,7 @@ def generate_thread():
                         'names_list': [current_name],
                         'is_folder_task': False,
                         'provider': 'leonardo',
+                        'prompt_provider': prompt_source,
                         'leonardo_key': leonardo_key
                     }
                 tasks_to_run.append(task_info)
@@ -1161,6 +1227,7 @@ def generate_thread():
                                 'is_folder_task': True,
                                 'folder_name': folder_name_val,
                                 'provider': provider,
+                                'prompt_provider': prompt_source,
                                 'prompt_key': together_prompt_key,
                                 'image_key': together_image_key
                             }
@@ -1173,6 +1240,7 @@ def generate_thread():
                                 'is_folder_task': True,
                                 'folder_name': folder_name_val,
                                 'provider': 'leonardo',
+                                'prompt_provider': prompt_source,
                                 'leonardo_key': leonardo_key
                             }
                         tasks_to_run.append(task_info)
@@ -1591,8 +1659,25 @@ ctk.CTkLabel(together_prompt_frame, text="Together Prompt Key:").pack(side="left
 entry_together_prompt = ctk.CTkEntry(together_prompt_frame, placeholder_text="Ключ Together для промпта...", show="*")
 entry_together_prompt.pack(side="left", fill="x", expand=True)
 
+prompt_source_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
+prompt_source_frame.grid(row=1, column=0, padx=10, pady=(0,5), sticky="w")
+
+prompt_together_var = ctk.IntVar(value=1)
+prompt_lmstudio_var = ctk.IntVar(value=0)
+
+def _on_prompt_toggle(src):
+    if src == 'together' and prompt_together_var.get():
+        prompt_lmstudio_var.set(0)
+    elif src == 'lmstudio' and prompt_lmstudio_var.get():
+        prompt_together_var.set(0)
+
+checkbox_prompt_together = ctk.CTkCheckBox(prompt_source_frame, text="Together Prompt", variable=prompt_together_var, command=lambda: _on_prompt_toggle('together'))
+checkbox_prompt_together.pack(side="left", padx=(5,2))
+checkbox_prompt_lmstudio = ctk.CTkCheckBox(prompt_source_frame, text="LM Studio (llava-phi-3-mini)", variable=prompt_lmstudio_var, command=lambda: _on_prompt_toggle('lmstudio'))
+checkbox_prompt_lmstudio.pack(side="left", padx=(5,0))
+
 together_image_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
-together_image_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+together_image_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
 together_image_frame.grid_columnconfigure(1, weight=1)
 ctk.CTkLabel(together_image_frame, text="Together Image Key:").grid(row=0, column=0, padx=(0, 5))
 entry_together_image = ctk.CTkEntry(together_image_frame, placeholder_text="Ключ Together для картинок...", show="*")
@@ -1613,7 +1698,7 @@ checkbox_flux_dev = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 [dev] ($0
 checkbox_flux_dev.grid(row=1, column=1, sticky="w", padx=(5, 0))
 
 leonardo_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
-leonardo_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+leonardo_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
 ctk.CTkLabel(leonardo_frame, text="Leonardo AI Key:").pack(side="left", padx=(0, 5))
 entry_leonardo = ctk.CTkEntry(leonardo_frame, placeholder_text="Введите ваш ключ от Leonardo AI...", show="*")
 entry_leonardo.pack(side="left", fill="x", expand=True)
@@ -1708,6 +1793,9 @@ settings = load_settings()  # Загружает данные в глобаль�
 
 entry_together_prompt.insert(0, settings.get("together_prompt_api", ""))
 entry_together_image.insert(0, settings.get("together_image_api", ""))
+prompt_source_loaded = settings.get("prompt_source", "together")
+prompt_together_var.set(1 if prompt_source_loaded == "together" else 0)
+prompt_lmstudio_var.set(1 if prompt_source_loaded == "lmstudio" else 0)
 flux_model_loaded = settings.get("flux_model", "schnell")
 flux_schnell_var.set(1 if flux_model_loaded == "schnell" else 0)
 flux_dev_var.set(1 if flux_model_loaded == "dev" else 0)
