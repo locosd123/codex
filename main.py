@@ -586,10 +586,16 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
         raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
 
     try:
-        with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
-            workflow = json.load(wf)
+        # Читаем workflow в UTF-8, при ошибке пробуем с BOM
+        try:
+            with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
+                workflow = json.load(wf)
+        except json.JSONDecodeError:
+            with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8-sig") as wf:
+                workflow = json.load(wf)
     except Exception as e:
-        raise RuntimeError(f"Не удалось загрузить workflow ComfyUI: {e}") from e
+        raise RuntimeError(
+            f"Не удалось загрузить workflow ComfyUI: {e}") from e
 
     def _replace_prompt(obj):
         if isinstance(obj, dict):
