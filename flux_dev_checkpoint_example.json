@@ -1,0 +1,17 @@
+{
+  "nodes": {
+    "1": {
+      "class_type": "KSampler",
+      "inputs": {"prompt": "__PROMPT__"}
+    },
+    "2": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "flux_dev",
+        "prompt": "@node:1",
+        "output_path": "output"
+      }
+    }
+  },
+  "connections": [[1, 2]]
+}

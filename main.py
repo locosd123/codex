@@ -127,6 +127,7 @@ LMSTUDIO_MAX_RETRIES = 3
 # --- Константы для локального ComfyUI ---
 COMFYUI_URL = "http://127.0.0.1:8188"
 COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint_example.json")
+COMFYUI_OUTPUT_DIR = os.path.join(os.path.dirname(COMFYUI_WORKFLOW_FILE), "output")
 COMFYUI_MAX_RETRIES = 3
 COMFYUI_POLL_INTERVAL = 2
 # Увеличено время ожидания результата до ~10 минут на картинку
@@ -652,7 +653,14 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
                             timeout=COMFYUI_REQUEST_TIMEOUT,
                         )
                         img_resp.raise_for_status()
-                        return base64.b64encode(img_resp.content).decode("utf-8")
+                        b64_str = base64.b64encode(img_resp.content).decode("utf-8")
+
+                        saved_path = os.path.join(
+                            COMFYUI_OUTPUT_DIR,
+                            params.get("subfolder", ""),
+                            params.get("filename", ""),
+                        )
+                        return b64_str, saved_path
                 time.sleep(COMFYUI_POLL_INTERVAL)
             raise RuntimeError("Истекло время ожидания результата ComfyUI.")
         except Exception as e:
@@ -821,15 +829,18 @@ def worker(task_id, task_data):
                 raise RuntimeError("Задача прервана пользователем перед генерацией изображения.")
 
             # Шаг 5: Генерация изображения
+            comfy_saved_path = None
             if provider == 'flux_schnell':
                 log_message(f"{log_prefix} Отправка промпта в FLUX.1-schnell...")
                 b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, image_key)
+                comfy_saved_path = None
             elif provider == 'flux_dev':
                 log_message(f"{log_prefix} Отправка промпта в локальный ComfyUI (FLUX DEV)...")
-                b64_image_data = call_comfyui_flux_dev_with_retry(final_prompt_for_image)
+                b64_image_data, comfy_saved_path = call_comfyui_flux_dev_with_retry(final_prompt_for_image)
             else:
                 log_message(f"{log_prefix} Отправка промпта в Leonardo.ai...")
                 b64_image_data = call_leonardo_with_retry(final_prompt_for_image, leonardo_key)
+                comfy_saved_path = None
 
             if not b64_image_data:
                 raise RuntimeError(f"{log_prefix} API не вернул данные изображения после ретраев.")
@@ -878,8 +889,17 @@ def worker(task_id, task_data):
                         f"{log_prefix} Слишком много файлов с похожими именами '{safe_base}' в папке: {target_save_dir}")
 
             log_message(f"{log_prefix} Сохранение в: {out_path}", level=logging.DEBUG)
-            with open(out_path, "wb") as f:
-                f.write(image_bytes)
+            if comfy_saved_path and os.path.isfile(comfy_saved_path):
+                try:
+                    shutil.copy(comfy_saved_path, out_path)
+                    log_message(f"{log_prefix} Копия из ComfyUI: {comfy_saved_path}", level=logging.DEBUG)
+                except Exception as copy_err:
+                    log_message(f"{log_prefix} Не удалось скопировать файл из ComfyUI ({copy_err}). Сохраняем из памяти.", level=logging.WARNING)
+                    with open(out_path, "wb") as f:
+                        f.write(image_bytes)
+            else:
+                with open(out_path, "wb") as f:
+                    f.write(image_bytes)
 
             log_message(f"{log_prefix} Успешно сохранено: {out_path}")
             # Если все успешно, выходим из цикла ретраев worker
