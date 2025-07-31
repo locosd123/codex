@@ -1,0 +1,76 @@
+{
+    "together_prompt_api": "d35a7b8f3906533c0df18e7cb40f0314ae836c2f5b41405be834a4e7335a9689",
+    "together_image_api": "d35a7b8f3906533c0df18e7cb40f0314ae836c2f5b41405be834a4e7335a9689",
+    "leonardo_api": "",
+    "prompt_source": "lmstudio",
+    "flux_model": "dev",
+    "save_dir": "C:/Users/maxdl/Downloads",
+    "threads": "1",
+    "default_image_url": "",
+    "default_names": "",
+    "folders": [
+        {
+            "name": "Main",
+            "url": "https://comparateur-casinos.fr/storage/assets/spinmama-logo-banniere-casino.webp",
+            "names": "название1, название2, название3",
+            "quantity": 1,
+            "checked": true
+        },
+        {
+            "name": "App",
+            "url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ6dL0zgRDPXm_Cqf9gI9-ohFXukfqOw7iMlQ&s",
+            "names": "1, 2, 3",
+            "quantity": 2,
+            "checked": false
+        },
+        {
+            "name": "Demo",
+            "url": "https://online.casino/images/share/casino/betonred.jpg",
+            "names": "1, 2, 3",
+            "quantity": 10,
+            "checked": false
+        },
+        {
+            "name": "Login",
+            "url": "",
+            "names": "",
+            "quantity": 2,
+            "checked": false
+        },
+        {
+            "name": "Brand 1",
+            "url": "",
+            "names": "",
+            "quantity": 1,
+            "checked": false
+        },
+        {
+            "name": "Brand 2",
+            "url": "",
+            "names": "",
+            "quantity": 1,
+            "checked": false
+        },
+        {
+            "name": "Brand 3",
+            "url": "",
+            "names": "",
+            "quantity": 1,
+            "checked": false
+        },
+        {
+            "name": "About us",
+            "url": "",
+            "names": "",
+            "quantity": 1,
+            "checked": false
+        },
+        {
+            "name": "Bonus",
+            "url": "",
+            "names": "",
+            "quantity": 2,
+            "checked": false
+        }
+    ]
+}
