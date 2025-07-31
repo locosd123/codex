@@ -586,9 +586,21 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
 
     try:
         with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
-            workflow = json.load(wf)
+            workflow_raw = json.load(wf)
     except Exception as e:
         raise RuntimeError(f"Не удалось загрузить workflow ComfyUI: {e}") from e
+
+    # В сохраненных файлах могут использоваться разные ключи
+    # ("prompt", "nodes", или сам словарь). Выбираем корректный.
+    if isinstance(workflow_raw, dict):
+        if "prompt" in workflow_raw:
+            workflow = workflow_raw["prompt"]
+        elif "nodes" in workflow_raw:
+            workflow = workflow_raw["nodes"]
+        else:
+            workflow = workflow_raw
+    else:
+        raise RuntimeError("Некорректный формат workflow ComfyUI")
 
     def _replace_prompt(obj):
         if isinstance(obj, dict):

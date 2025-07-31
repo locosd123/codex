@@ -1,5 +1,5 @@
 {
-  "nodes": {
+  "prompt": {
     "1": {
       "class_type": "KSampler",
       "inputs": {"prompt": "__PROMPT__"}
@@ -8,10 +8,9 @@
       "class_type": "SaveImage",
       "inputs": {
         "filename_prefix": "flux_dev",
-        "prompt": "@node:1",
+        "images": "@node:1",
         "output_path": "output"
       }
     }
-  },
-  "connections": [[1, 2]]
+  }
 }
