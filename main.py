@@ -126,7 +126,10 @@ LMSTUDIO_MAX_RETRIES = 3
 
 # --- Константы для локального ComfyUI ---
 COMFYUI_URL = "http://127.0.0.1:8188"
-COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint_example.json")
+# Путь к workflow для генерации изображений через ComfyUI (FLUX Dev)
+# Используем основной файл конфигурации, который должен находиться
+# рядом с исполняемым скриптом
+COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint.json")
 COMFYUI_MAX_RETRIES = 3
 COMFYUI_POLL_INTERVAL = 2
 # Увеличено время ожидания результата до ~10 минут на картинку
