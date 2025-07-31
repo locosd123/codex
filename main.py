@@ -133,7 +133,8 @@ COMFYUI_POLL_INTERVAL = 2
 # (300 попыток по 2 секунды каждая)
 COMFYUI_POLL_ATTEMPTS = 300
 # Таймаут в секундах для HTTP-запросов к локальному ComfyUI
-COMFYUI_REQUEST_TIMEOUT = 180
+# Увеличено до 600 (10 минут), чтобы дождаться завершения долгих задач
+COMFYUI_REQUEST_TIMEOUT = 600
 
 script_dir = application_path
 images_dir = os.path.join(script_dir, "Images")
