@@ -645,10 +645,15 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
                 )
                 hist_resp.raise_for_status()
                 hist = hist_resp.json()
-                images = hist.get("images") or {}
-                for node_imgs in images.values():
-                    if node_imgs:
-                        info = node_imgs[0]
+                prompt_info = hist.get(prompt_id)
+                if not prompt_info:
+                    time.sleep(COMFYUI_POLL_INTERVAL)
+                    continue
+                outputs = prompt_info.get("outputs", {})
+                for node_output in outputs.values():
+                    images = node_output.get("images") or []
+                    if images:
+                        info = images[0]
                         params = {
                             "filename": info.get("filename"),
                             "subfolder": info.get("subfolder", ""),
