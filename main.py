@@ -126,7 +126,10 @@ LMSTUDIO_MAX_RETRIES = 3
 
 # --- Константы для локального ComfyUI ---
 COMFYUI_URL = "http://127.0.0.1:8188"
-COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint_example.json")
+# Путь к workflow для генерации изображений через ComfyUI (FLUX Dev)
+# Используем основной файл конфигурации, который должен находиться
+# рядом с исполняемым скриптом
+COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint.json")
 COMFYUI_MAX_RETRIES = 3
 COMFYUI_POLL_INTERVAL = 2
 # Увеличено время ожидания результата до ~10 минут на картинку
@@ -583,10 +586,16 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
         raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
 
     try:
-        with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
-            workflow = json.load(wf)
+        # Читаем workflow в UTF-8, при ошибке пробуем с BOM
+        try:
+            with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
+                workflow = json.load(wf)
+        except json.JSONDecodeError:
+            with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8-sig") as wf:
+                workflow = json.load(wf)
     except Exception as e:
-        raise RuntimeError(f"Не удалось загрузить workflow ComfyUI: {e}") from e
+        raise RuntimeError(
+            f"Не удалось загрузить workflow ComfyUI: {e}") from e
 
     def _replace_prompt(obj):
         if isinstance(obj, dict):
@@ -636,10 +645,15 @@ def call_comfyui_flux_dev_with_retry(prompt: str):
                 )
                 hist_resp.raise_for_status()
                 hist = hist_resp.json()
-                images = hist.get("images") or {}
-                for node_imgs in images.values():
-                    if node_imgs:
-                        info = node_imgs[0]
+                prompt_info = hist.get(prompt_id)
+                if not prompt_info:
+                    time.sleep(COMFYUI_POLL_INTERVAL)
+                    continue
+                outputs = prompt_info.get("outputs", {})
+                for node_output in outputs.values():
+                    images = node_output.get("images") or []
+                    if images:
+                        info = images[0]
                         params = {
                             "filename": info.get("filename"),
                             "subfolder": info.get("subfolder", ""),
