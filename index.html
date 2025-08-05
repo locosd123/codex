@@ -194,13 +194,14 @@
             });
             // Анализ текста
             analyzeBtn.addEventListener('click', function() {
-                // Get all text content including headings
-                const text = textInput.innerHTML;
+                // Получаем HTML и чистый текст (включая заголовки)
+                const originalHTML = textInput.innerHTML;
+                const originalText = textInput.textContent;
                 const keywords = keywordsInput.textContent
                     .split(/[\n,]/)
                     .map(k => k.trim())
                     .filter(k => k !== '');
-                if (!text.trim()) {
+                if (!originalText.trim()) {
                     alert('Please enter text to analyze');
                     return;
                 }
@@ -208,8 +209,8 @@
                     alert('Please enter keywords to search for');
                     return;
                 }
-                // Сохраняем исходный текст для работы с ним
-                let processedText = text;
+                let processedHTML = originalHTML;
+                let tempText = originalText;
                 const stats = {};
                 let totalCount = 0;
                 // Сортируем ключевые слова по длине (от длинных к коротким)
@@ -217,43 +218,26 @@
                     .map(k => k.trim())
                     .filter(k => k !== '')
                     .sort((a, b) => b.length - a.length);
-                // Создаем карту для хранения статистики
-                const keywordMap = new Map();
-                sortedKeywords.forEach(keyword => {
-                    keywordMap.set(keyword, 0);
-                });
                 // Обрабатываем текст
-                let tempText = processedText;
                 sortedKeywords.forEach(keyword => {
-                    // Создаем регулярное выражение для точного совпадения слова/фразы (case-insensitive)
-                    const regex = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'gi');
-                    
-                    // Находим все совпадения в нижнем регистре для точного подсчета
-                    const lowerText = tempText.toLowerCase();
-                    const lowerKeyword = keyword.toLowerCase();
-                    const regexLower = new RegExp(`\\b${escapeRegExp(lowerKeyword)}\\b`, 'g');
-                    const matches = lowerText.match(regexLower);
-                    const count = matches ? matches.length : 0;
-                    
-                    // Обновляем статистику
-                    keywordMap.set(keyword, count);
-                    totalCount += count;
-                    
-                    // Удаляем найденные совпадения из временного текста,
-                    // чтобы они не учитывались в других более коротких ключевых словах
-                    tempText = tempText.replace(regex, '');
-                    
-                    // Подсвечиваем вхождения в оригинальном тексте (сохраняя оригинальный регистр)
-                    processedText = processedText.replace(regex, match => 
-                        `<span class="highlight">${match}</span>`
-                    );
-                });
-                // Переносим статистику в объект stats
-                keywordMap.forEach((value, key) => {
-                    stats[key] = value;
+                    const variants = [keyword, switchLayout(keyword)];
+                    let keywordCount = 0;
+                    variants.forEach(variant => {
+                        if (!variant) return;
+                        const regex = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(variant)}(?![\\p{L}\\p{N}])`, 'giu');
+                        const matches = tempText.match(regex);
+                        const count = matches ? matches.length : 0;
+                        if (count > 0) {
+                            keywordCount += count;
+                            tempText = tempText.replace(regex, ' ');
+                            processedHTML = processedHTML.replace(regex, m => `<span class="highlight">${m}</span>`);
+                        }
+                    });
+                    stats[keyword] = keywordCount;
+                    totalCount += keywordCount;
                 });
                 // Highlight directly in the original text input
-                textInput.innerHTML = processedText;
+                textInput.innerHTML = processedHTML;
                 
                 // Show stats in the table
                 const resultsTable = document.getElementById('resultsTable');
@@ -300,6 +284,26 @@
             // Функция для экранирования спецсимволов в регулярных выражениях
             function escapeRegExp(string) {
                 return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+
+            // Переключение раскладки клавиатуры (русская <-> английская)
+            function switchLayout(str) {
+                const ru = 'ёйцукенгшщзхъфывапролджэячсмитьбю';
+                const en = '`qwertyuiop[]asdfghjkl;\'zxcvbnm,.';
+                const map = {};
+                for (let i = 0; i < ru.length; i++) {
+                    map[ru[i]] = en[i];
+                }
+                for (let i = 0; i < en.length; i++) {
+                    map[en[i]] = ru[i];
+                }
+                return str
+                    .split('')
+                    .map(ch => {
+                        const lower = ch.toLowerCase();
+                        return map[lower] ? map[lower] : ch;
+                    })
+                    .join('');
             }
         });
     </script>
