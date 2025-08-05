@@ -28,6 +28,12 @@
         .copy-btn:active {
             transform: scale(0.95);
         }
+        .empty-line {
+            background-color: #fecaca;
+        }
+        .double-space {
+            background-color: #bfdbfe;
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -78,6 +84,18 @@
                     </button>
                 </div>
             </div>
+        </div>
+
+        <!-- Дополнительные проверки -->
+        <div class="flex justify-center space-x-6 mb-4">
+            <label class="inline-flex items-center">
+                <input type="checkbox" id="highlightEmpty" class="form-checkbox">
+                <span class="ml-2">Подсветить пустые строки</span>
+            </label>
+            <label class="inline-flex items-center">
+                <input type="checkbox" id="highlightDouble" class="form-checkbox">
+                <span class="ml-2">Подсветить двойные пробелы</span>
+            </label>
         </div>
 
         <!-- Кнопка анализа -->
@@ -155,6 +173,8 @@
             const clearKeywords = document.getElementById('clearKeywords');
             const pasteText = document.getElementById('pasteText');
             const pasteKeywords = document.getElementById('pasteKeywords');
+            const highlightEmpty = document.getElementById('highlightEmpty');
+            const highlightDouble = document.getElementById('highlightDouble');
             // Установка плейсхолдера для contenteditable div
             textInput.addEventListener('focus', function() {
                 if (this.textContent === '') {
@@ -237,7 +257,15 @@
                     totalCount += keywordCount;
                 });
                 // Highlight directly in the original text input
-                textInput.innerHTML = processedHTML;
+                const container = document.createElement('div');
+                container.innerHTML = processedHTML;
+                if (highlightEmpty.checked) {
+                    markEmptyLines(container);
+                }
+                if (highlightDouble.checked) {
+                    markDoubleSpaces(container);
+                }
+                textInput.innerHTML = container.innerHTML;
                 
                 // Show stats in the table
                 const resultsTable = document.getElementById('resultsTable');
@@ -259,7 +287,7 @@
             // Handle paste event to preserve formatting
             textInput.addEventListener('paste', function(e) {
                 e.preventDefault();
-                const text = (e.clipboardData || window.clipboardData).getData('text/html') || 
+                const text = (e.clipboardData || window.clipboardData).getData('text/html') ||
                              (e.clipboardData || window.clipboardData).getData('text/plain');
                 
                 // Insert HTML if available, otherwise plain text
@@ -281,6 +309,41 @@
                     document.execCommand('insertText', false, text);
                 }
             });
+            // Подсветка пустых строк
+            function markEmptyLines(container) {
+                const blocks = container.querySelectorAll('div, p');
+                blocks.forEach(block => {
+                    if (block.textContent.trim() === '') {
+                        block.classList.add('empty-line');
+                    }
+                });
+            }
+
+            // Подсветка двойных пробелов
+            function markDoubleSpaces(container) {
+                const walker = document.createTreeWalker(container, Node.TEXT_NODE, null, false);
+                const nodes = [];
+                while (walker.nextNode()) {
+                    nodes.push(walker.currentNode);
+                }
+                nodes.forEach(node => {
+                    const parts = node.textContent.split(/(  )/);
+                    if (parts.length > 1) {
+                        const frag = document.createDocumentFragment();
+                        parts.forEach(part => {
+                            if (part === '  ') {
+                                const span = document.createElement('span');
+                                span.className = 'double-space';
+                                span.textContent = '  ';
+                                frag.appendChild(span);
+                            } else {
+                                frag.appendChild(document.createTextNode(part));
+                            }
+                        });
+                        node.parentNode.replaceChild(frag, node);
+                    }
+                });
+            }
             // Функция для экранирования спецсимволов в регулярных выражениях
             function escapeRegExp(string) {
                 return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
