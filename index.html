@@ -34,6 +34,12 @@
         .double-space {
             background-color: #bfdbfe;
         }
+        #textInput img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0.5em 0;
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -54,14 +60,6 @@
                 </div>
                 <div class="relative">
                     <div id="textInput" contenteditable="true" class="w-full border border-gray-300 rounded-md p-4 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition overflow-y-auto" style="min-height: 300px; max-height: 300px;" data-placeholder="Paste your text here...">
-                        <style scoped>
-                            #textInput img {
-                                max-width: 100%;
-                                height: auto;
-                                display: block;
-                                margin: 0.5em 0;
-                            }
-                        </style>
                     </div>
                     <button id="pasteText" class="absolute top-2 right-2 bg-blue-100 text-blue-600 px-3 py-1 rounded-md text-sm hover:bg-blue-200 transition flex items-center copy-btn">
                         <i class="fas fa-paste mr-1"></i> Paste
@@ -318,6 +316,7 @@
                  }
                  elements.forEach(el => {
                      if (el.tagName === 'IMG') return;
+                     if (el.closest('style, script')) return;
 
                      if (el.tagName === 'BR') {
                          let prev = el.previousSibling;
@@ -351,6 +350,7 @@
                  }
                  nodes.forEach(node => {
                      if (!node.textContent.includes('  ')) return;
+                     if (node.parentElement && node.parentElement.closest('style, script')) return;
                      const frag = document.createDocumentFragment();
                      node.textContent.split(/( {2,})/g).forEach(part => {
                          if (/ {2,}/.test(part)) {
