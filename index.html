@@ -28,6 +28,18 @@
         .copy-btn:active {
             transform: scale(0.95);
         }
+        .empty-line {
+            background-color: #fecaca;
+        }
+        .double-space {
+            background-color: #bfdbfe;
+        }
+        #textInput img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0.5em 0;
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -48,14 +60,6 @@
                 </div>
                 <div class="relative">
                     <div id="textInput" contenteditable="true" class="w-full border border-gray-300 rounded-md p-4 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition overflow-y-auto" style="min-height: 300px; max-height: 300px;" data-placeholder="Paste your text here...">
-                        <style scoped>
-                            #textInput img {
-                                max-width: 100%;
-                                height: auto;
-                                display: block;
-                                margin: 0.5em 0;
-                            }
-                        </style>
                     </div>
                     <button id="pasteText" class="absolute top-2 right-2 bg-blue-100 text-blue-600 px-3 py-1 rounded-md text-sm hover:bg-blue-200 transition flex items-center copy-btn">
                         <i class="fas fa-paste mr-1"></i> Paste
@@ -78,6 +82,18 @@
                     </button>
                 </div>
             </div>
+        </div>
+
+        <!-- Дополнительные проверки -->
+        <div class="flex justify-center space-x-6 mb-4">
+            <label class="inline-flex items-center">
+                <input type="checkbox" id="highlightEmpty" class="form-checkbox">
+                <span class="ml-2">Подсветить пустые строки</span>
+            </label>
+            <label class="inline-flex items-center">
+                <input type="checkbox" id="highlightDouble" class="form-checkbox">
+                <span class="ml-2">Подсветить двойные пробелы</span>
+            </label>
         </div>
 
         <!-- Кнопка анализа -->
@@ -155,6 +171,8 @@
             const clearKeywords = document.getElementById('clearKeywords');
             const pasteText = document.getElementById('pasteText');
             const pasteKeywords = document.getElementById('pasteKeywords');
+            const highlightEmpty = document.getElementById('highlightEmpty');
+            const highlightDouble = document.getElementById('highlightDouble');
             // Установка плейсхолдера для contenteditable div
             textInput.addEventListener('focus', function() {
                 if (this.textContent === '') {
@@ -194,13 +212,14 @@
             });
             // Анализ текста
             analyzeBtn.addEventListener('click', function() {
-                // Get all text content including headings
-                const text = textInput.innerHTML;
+                // Получаем HTML и чистый текст (включая заголовки)
+                const originalHTML = textInput.innerHTML;
+                const originalText = textInput.textContent;
                 const keywords = keywordsInput.textContent
                     .split(/[\n,]/)
                     .map(k => k.trim())
                     .filter(k => k !== '');
-                if (!text.trim()) {
+                if (!originalText.trim()) {
                     alert('Please enter text to analyze');
                     return;
                 }
@@ -208,8 +227,8 @@
                     alert('Please enter keywords to search for');
                     return;
                 }
-                // Сохраняем исходный текст для работы с ним
-                let processedText = text;
+                let processedHTML = originalHTML;
+                let tempText = originalText;
                 const stats = {};
                 let totalCount = 0;
                 // Сортируем ключевые слова по длине (от длинных к коротким)
@@ -217,43 +236,34 @@
                     .map(k => k.trim())
                     .filter(k => k !== '')
                     .sort((a, b) => b.length - a.length);
-                // Создаем карту для хранения статистики
-                const keywordMap = new Map();
-                sortedKeywords.forEach(keyword => {
-                    keywordMap.set(keyword, 0);
-                });
                 // Обрабатываем текст
-                let tempText = processedText;
                 sortedKeywords.forEach(keyword => {
-                    // Создаем регулярное выражение для точного совпадения слова/фразы (case-insensitive)
-                    const regex = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'gi');
-                    
-                    // Находим все совпадения в нижнем регистре для точного подсчета
-                    const lowerText = tempText.toLowerCase();
-                    const lowerKeyword = keyword.toLowerCase();
-                    const regexLower = new RegExp(`\\b${escapeRegExp(lowerKeyword)}\\b`, 'g');
-                    const matches = lowerText.match(regexLower);
-                    const count = matches ? matches.length : 0;
-                    
-                    // Обновляем статистику
-                    keywordMap.set(keyword, count);
-                    totalCount += count;
-                    
-                    // Удаляем найденные совпадения из временного текста,
-                    // чтобы они не учитывались в других более коротких ключевых словах
-                    tempText = tempText.replace(regex, '');
-                    
-                    // Подсвечиваем вхождения в оригинальном тексте (сохраняя оригинальный регистр)
-                    processedText = processedText.replace(regex, match => 
-                        `<span class="highlight">${match}</span>`
-                    );
-                });
-                // Переносим статистику в объект stats
-                keywordMap.forEach((value, key) => {
-                    stats[key] = value;
+                    const variants = [keyword, switchLayout(keyword)];
+                    let keywordCount = 0;
+                    variants.forEach(variant => {
+                        if (!variant) return;
+                        const regex = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(variant)}(?![\\p{L}\\p{N}])`, 'giu');
+                        const matches = tempText.match(regex);
+                        const count = matches ? matches.length : 0;
+                        if (count > 0) {
+                            keywordCount += count;
+                            tempText = tempText.replace(regex, ' ');
+                            processedHTML = processedHTML.replace(regex, m => `<span class="highlight">${m}</span>`);
+                        }
+                    });
+                    stats[keyword] = keywordCount;
+                    totalCount += keywordCount;
                 });
                 // Highlight directly in the original text input
-                textInput.innerHTML = processedText;
+                const container = document.createElement('div');
+                container.innerHTML = processedHTML;
+                if (highlightEmpty.checked) {
+                    markEmptyLines(container);
+                }
+                if (highlightDouble.checked) {
+                    markDoubleSpaces(container);
+                }
+                textInput.innerHTML = container.innerHTML;
                 
                 // Show stats in the table
                 const resultsTable = document.getElementById('resultsTable');
@@ -275,7 +285,7 @@
             // Handle paste event to preserve formatting
             textInput.addEventListener('paste', function(e) {
                 e.preventDefault();
-                const text = (e.clipboardData || window.clipboardData).getData('text/html') || 
+                const text = (e.clipboardData || window.clipboardData).getData('text/html') ||
                              (e.clipboardData || window.clipboardData).getData('text/plain');
                 
                 // Insert HTML if available, otherwise plain text
@@ -297,9 +307,87 @@
                     document.execCommand('insertText', false, text);
                 }
             });
+            // Подсветка пустых строк
+             function markEmptyLines(container) {
+                 const elements = [];
+                 const walker = document.createTreeWalker(container, Node.ELEMENT_NODE, null, false);
+                 while (walker.nextNode()) {
+                     elements.push(walker.currentNode);
+                 }
+                 elements.forEach(el => {
+                     if (el.tagName === 'IMG') return;
+                     if (el.closest('style, script')) return;
+
+                     if (el.tagName === 'BR') {
+                         let prev = el.previousSibling;
+                         while (prev && prev.nodeType === Node.TEXT_NODE && prev.textContent.trim() === '') {
+                             prev = prev.previousSibling;
+                         }
+                         if (!prev || (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === 'BR')) {
+                             const span = document.createElement('span');
+                             span.className = 'empty-line';
+                             el.parentNode.replaceChild(span, el);
+                             span.appendChild(document.createElement('br'));
+                         }
+                         return;
+                     }
+
+                     const hasMedia = el.querySelector('img, video, iframe, object, embed');
+                     const children = Array.from(el.children);
+                     const onlyBr = children.length === 0 || children.every(ch => ch.tagName === 'BR');
+                     if (!hasMedia && el.textContent.trim() === '' && onlyBr) {
+                         el.classList.add('empty-line');
+                     }
+                 });
+             }
+
+             // Подсветка двойных пробелов
+             function markDoubleSpaces(container) {
+                 const walker = document.createTreeWalker(container, Node.TEXT_NODE, null, false);
+                 const nodes = [];
+                 while (walker.nextNode()) {
+                     nodes.push(walker.currentNode);
+                 }
+                 nodes.forEach(node => {
+                     if (!node.textContent.includes('  ')) return;
+                     if (node.parentElement && node.parentElement.closest('style, script')) return;
+                     const frag = document.createDocumentFragment();
+                     node.textContent.split(/( {2,})/g).forEach(part => {
+                         if (/ {2,}/.test(part)) {
+                             const span = document.createElement('span');
+                             span.className = 'double-space';
+                             span.textContent = part;
+                             frag.appendChild(span);
+                         } else {
+                             frag.appendChild(document.createTextNode(part));
+                         }
+                     });
+                     node.parentNode.replaceChild(frag, node);
+                 });
+             }
             // Функция для экранирования спецсимволов в регулярных выражениях
             function escapeRegExp(string) {
                 return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+
+            // Переключение раскладки клавиатуры (русская <-> английская)
+            function switchLayout(str) {
+                const ru = 'ёйцукенгшщзхъфывапролджэячсмитьбю';
+                const en = '`qwertyuiop[]asdfghjkl;\'zxcvbnm,.';
+                const map = {};
+                for (let i = 0; i < ru.length; i++) {
+                    map[ru[i]] = en[i];
+                }
+                for (let i = 0; i < en.length; i++) {
+                    map[en[i]] = ru[i];
+                }
+                return str
+                    .split('')
+                    .map(ch => {
+                        const lower = ch.toLowerCase();
+                        return map[lower] ? map[lower] : ch;
+                    })
+                    .join('');
             }
         });
     </script>
