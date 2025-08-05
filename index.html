@@ -310,40 +310,61 @@
                 }
             });
             // Подсветка пустых строк
-            function markEmptyLines(container) {
-                const blocks = container.querySelectorAll('div, p');
-                blocks.forEach(block => {
-                    if (block.textContent.trim() === '') {
-                        block.classList.add('empty-line');
-                    }
-                });
-            }
+             function markEmptyLines(container) {
+                 const elements = [];
+                 const walker = document.createTreeWalker(container, Node.ELEMENT_NODE, null, false);
+                 while (walker.nextNode()) {
+                     elements.push(walker.currentNode);
+                 }
+                 elements.forEach(el => {
+                     if (el.tagName === 'IMG') return;
 
-            // Подсветка двойных пробелов
-            function markDoubleSpaces(container) {
-                const walker = document.createTreeWalker(container, Node.TEXT_NODE, null, false);
-                const nodes = [];
-                while (walker.nextNode()) {
-                    nodes.push(walker.currentNode);
-                }
-                nodes.forEach(node => {
-                    const parts = node.textContent.split(/(  )/);
-                    if (parts.length > 1) {
-                        const frag = document.createDocumentFragment();
-                        parts.forEach(part => {
-                            if (part === '  ') {
-                                const span = document.createElement('span');
-                                span.className = 'double-space';
-                                span.textContent = '  ';
-                                frag.appendChild(span);
-                            } else {
-                                frag.appendChild(document.createTextNode(part));
-                            }
-                        });
-                        node.parentNode.replaceChild(frag, node);
-                    }
-                });
-            }
+                     if (el.tagName === 'BR') {
+                         let prev = el.previousSibling;
+                         while (prev && prev.nodeType === Node.TEXT_NODE && prev.textContent.trim() === '') {
+                             prev = prev.previousSibling;
+                         }
+                         if (!prev || (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === 'BR')) {
+                             const span = document.createElement('span');
+                             span.className = 'empty-line';
+                             el.parentNode.replaceChild(span, el);
+                             span.appendChild(document.createElement('br'));
+                         }
+                         return;
+                     }
+
+                     const hasMedia = el.querySelector('img, video, iframe, object, embed');
+                     const children = Array.from(el.children);
+                     const onlyBr = children.length === 0 || children.every(ch => ch.tagName === 'BR');
+                     if (!hasMedia && el.textContent.trim() === '' && onlyBr) {
+                         el.classList.add('empty-line');
+                     }
+                 });
+             }
+
+             // Подсветка двойных пробелов
+             function markDoubleSpaces(container) {
+                 const walker = document.createTreeWalker(container, Node.TEXT_NODE, null, false);
+                 const nodes = [];
+                 while (walker.nextNode()) {
+                     nodes.push(walker.currentNode);
+                 }
+                 nodes.forEach(node => {
+                     if (!node.textContent.includes('  ')) return;
+                     const frag = document.createDocumentFragment();
+                     node.textContent.split(/( {2,})/g).forEach(part => {
+                         if (/ {2,}/.test(part)) {
+                             const span = document.createElement('span');
+                             span.className = 'double-space';
+                             span.textContent = part;
+                             frag.appendChild(span);
+                         } else {
+                             frag.appendChild(document.createTextNode(part));
+                         }
+                     });
+                     node.parentNode.replaceChild(frag, node);
+                 });
+             }
             // Функция для экранирования спецсимволов в регулярных выражениях
             function escapeRegExp(string) {
                 return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
