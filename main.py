@@ -30,6 +30,7 @@ from telegram.ext import (
 )
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.types import Message
 from telethon.errors import ApiIdInvalidError, BotMethodInvalidError
 from openai import OpenAI
@@ -40,6 +41,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TG_API_ID = os.getenv('TG_API_ID')
 TG_API_HASH = os.getenv('TG_API_HASH')
+TG_SESSION = os.getenv('TG_SESSION')
 if TG_API_ID is not None:
     TG_API_ID = int(TG_API_ID)
 
@@ -62,12 +64,14 @@ ATTEMPT_MSG    = (
 
 # ────────────── ГЛОБАЛЬНЫЕ КЛИЕНТЫ ─────────────────────────────────────────
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-tg_client     = TelegramClient(
-    "seo_news_session", TG_API_ID, TG_API_HASH, timeout=10
-)
-
-SESSION_PATH = Path("seo_news_session.session")
-USE_BOT_AUTH = not SESSION_PATH.exists()
+if TG_SESSION:
+    tg_client = TelegramClient(StringSession(TG_SESSION), TG_API_ID, TG_API_HASH, timeout=10)
+    SESSION_PATH = None
+    USE_BOT_AUTH = False
+else:
+    tg_client = TelegramClient("seo_news_session", TG_API_ID, TG_API_HASH, timeout=10)
+    SESSION_PATH = Path("seo_news_session.session")
+    USE_BOT_AUTH = not SESSION_PATH.exists()
 NO_ACCESS: set[str] = set()
 
 def _norm_chan(chan: str | int) -> str:

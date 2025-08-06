@@ -13,6 +13,10 @@ application created at <https://my.telegram.org>. These credentials must match
 any `seo_news_session.session` file you use; otherwise Telethon will raise an
 `ApiIdInvalidError` on startup.
 
+You can optionally supply a `TG_SESSION` string exported by Telethon instead of
+mounting a session file. When `TG_SESSION` is present, the bot authenticates as
+that user automatically.
+
 The `ADMIN_ID` variable is optional and allows the bot to send error tracebacks
 to your Telegram user.
 
@@ -39,7 +43,20 @@ python main.py
    ```
    Follow the prompts to log in; a `seo_news_session.session` file will appear.
 2. Place this session file next to `main.py` and make sure it is copied into the
-   container when deploying.
+   container when deploying. For Docker:
+   ```
+   docker run -d --name seonewsbot --env-file .env \
+     -v "$(pwd)/seo_news_session.session:/app/seo_news_session.session:ro" \
+     seonewsbot
+   ```
+
+   Alternatively, export the session as a string and set `TG_SESSION` in your
+   `.env` file:
+   ```python
+   from telethon.sessions import StringSession
+   print(StringSession.save(client.session))
+   ```
+   This avoids shipping the binary `.session` file.
 
 The bot will automatically use this session; otherwise it connects via the
 `TELEGRAM_BOT_TOKEN`.
