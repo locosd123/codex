@@ -31,6 +31,7 @@ from telegram.ext import (
 
 from telethon import TelegramClient
 from telethon.tl.types import Message
+from telethon.errors import ApiIdInvalidError
 from openai import OpenAI
 
 # ────────────── КОНФИГ ─────────────────────────────────────────────────────
@@ -64,6 +65,18 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 tg_client     = TelegramClient(
     "seo_news_session", TG_API_ID, TG_API_HASH, timeout=10
 )
+
+async def verify_tg_credentials() -> None:
+    """Check that ``TG_API_ID``/``TG_API_HASH`` are valid before starting."""
+    try:
+        await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    except ApiIdInvalidError as exc:  # pragma: no cover - network required
+        raise RuntimeError(
+            "TG_API_ID and TG_API_HASH are invalid. Obtain valid values at "
+            "https://my.telegram.org and ensure the session file matches."
+        ) from exc
+    finally:
+        await tg_client.disconnect()
 
 async def openai_call(method, *args, timeout=60, **kwargs):
     loop = asyncio.get_running_loop()
@@ -1218,6 +1231,9 @@ async def on_error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ────────────── MAIN ───────────────────────────────────────────────────────
 def main():
+    # validate Telegram credentials once at startup to fail fast if incorrect
+    asyncio.run(verify_tg_credentials())
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))

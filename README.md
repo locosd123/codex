@@ -8,6 +8,11 @@ cp .env.example .env
 nano .env
 ```
 
+The `TG_API_ID` and `TG_API_HASH` values must come from a Telegram API
+application created at <https://my.telegram.org>. These credentials must match
+any `seo_news_session.session` file you use; otherwise Telethon will raise an
+`ApiIdInvalidError` on startup.
+
 The `ADMIN_ID` variable is optional and allows the bot to send error tracebacks
 to your Telegram user.
 
