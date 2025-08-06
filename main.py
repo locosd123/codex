@@ -1,9 +1,11 @@
 # bot.py ────────────────────────────────────────────────────────────────────
-import json, re, html
+import json, re, html, traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 import asyncio
 import logging
+import os
+from dotenv import load_dotenv
 try:
     import fcntl  # POSIX locking
 except ModuleNotFoundError:  # pragma: no cover - Windows fallback
@@ -32,11 +34,20 @@ from telethon.tl.types import Message
 from openai import OpenAI
 
 # ────────────── КОНФИГ ─────────────────────────────────────────────────────
-OPENAI_API_KEY = "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"
-TELEGRAM_BOT_TOKEN   = "7621000604:AAHrWFyNx8JCrPkCtmtC4MWAV2Ri5-EpOQo"
-TG_API_ID     = "408198196"
-TG_API_HASH = "fe7151ae181d6fb73c854dd5d6242cd"
+load_dotenv()
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TG_API_ID = os.getenv('TG_API_ID')
+TG_API_HASH = os.getenv('TG_API_HASH')
+if TG_API_ID is not None:
+    TG_API_ID = int(TG_API_ID)
 
+if not all([OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TG_API_ID, TG_API_HASH]):
+    raise RuntimeError('Environment variables OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TG_API_ID and TG_API_HASH must be set')
+
+ADMIN_ID = os.getenv('ADMIN_ID')
+if ADMIN_ID is not None:
+    ADMIN_ID = int(ADMIN_ID)
 
 PROCESSED_FILE = Path("processed_ids.json")
 PROCESSED_LIMIT = 1000
@@ -453,7 +464,7 @@ CANCEL_KB = ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True)
 
 
 async def make_channel_kb(chans: list[str], ctx: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     lookup: dict[str, str] = {}
     names: list[str] = []
     for idx, c in enumerate(chans, 1):
@@ -697,7 +708,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if mode == "add_channels":
         new_channels = [c.strip().lstrip("@") for c in text.split(",") if c.strip()]
         added = []
-        await tg_client.start()
+        await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
         for c in new_channels:
             try:
                 ent = await tg_client.get_entity(c)
@@ -1017,7 +1028,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # -------------- задачи -----------------------------------------------------
 async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, limit: int | None = None) -> bool:
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     await log(ctx, "Запускаю обход всех каналов")
     from_dt = datetime.strptime(from_d, "%d.%m.%Y") if from_d else None
     to_dt   = datetime.strptime(to_d, "%d.%m.%Y") if to_d else None
@@ -1047,7 +1058,7 @@ async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, l
     return msg not in {"Введите количество постов больше, бот ничего не нашёл", ATTEMPT_MSG}
 
 async def run_pop_all(ctx, limit: int | None = None) -> bool:
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     await log(ctx, "Ищем популярные посты во всех каналах")
     cfg = get_cfg(ctx)
     ctx.chat_data["stop"] = False
@@ -1081,7 +1092,7 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     await log(ctx, f"Ищем популярные посты в {chan}")
     ctx.chat_data["stop"] = False
     ctx.chat_data["sent"] = 0
@@ -1105,7 +1116,7 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     return msg != "Введите количество постов больше, бот ничего не нашёл"
 
 async def run_recent_all(ctx, days: int) -> bool:
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     await log(ctx, f"Поиск постов за последние {days} дней во всех каналах")
     from_dt = datetime.now() - timedelta(days=days)
     to_dt = datetime.now()
@@ -1139,7 +1150,7 @@ async def run_recent_channel(ctx, chan: str, days: int) -> bool:
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     await log(ctx, f"Поиск постов за последние {days} дней в {chan}")
     from_dt = datetime.now() - timedelta(days=days)
     to_dt = datetime.now()
@@ -1173,7 +1184,7 @@ async def run_channel(
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start()
+    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
     await log(ctx, f"Парсим {chan}")
     from_dt = datetime.strptime(from_d, "%d.%m.%Y") if from_d else None
     to_dt   = datetime.strptime(to_d, "%d.%m.%Y") if to_d else None
@@ -1196,12 +1207,22 @@ async def run_channel(
     ctx.user_data.clear()
     return msg not in {"Введите количество постов больше, бот ничего не нашёл", ATTEMPT_MSG}
 
+# -------------- error handler ------------------------------------------------
+async def on_error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    tb = html.escape(''.join(traceback.format_exception(None, context.error, context.error.__traceback__)))
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(ADMIN_ID, f"<pre>{tb}</pre>", parse_mode="HTML")
+        except Exception:
+            logging.exception("Failed to send error message")
+
 # ────────────── MAIN ───────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
+    app.add_error_handler(on_error)
 
     print("Bot running…  (Ctrl+C to stop)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
