@@ -68,6 +68,10 @@ tg_client     = TelegramClient(
 
 SESSION_PATH = Path("seo_news_session.session")
 USE_BOT_AUTH = not SESSION_PATH.exists()
+NO_ACCESS: set[str] = set()
+
+def _norm_chan(chan: str | int) -> str:
+    return str(chan).lstrip("@")
 
 async def start_tg_client() -> None:
     if USE_BOT_AUTH:
@@ -332,7 +336,13 @@ async def fetch_posts(
         else:
             raise
     except BotMethodInvalidError:
-        logging.error("Bot user cannot access messages in %s; provide a user session", channel)
+        norm = _norm_chan(channel)
+        if norm not in NO_ACCESS:
+            NO_ACCESS.add(norm)
+            logging.error(
+                "Bot user cannot access messages in %s; provide a user session",
+                channel,
+            )
         return []
     except Exception:
         logging.exception("Failed to fetch posts")
@@ -1062,6 +1072,8 @@ async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, l
     cfg = get_cfg(ctx)
     attempts_total = 0
     for c in cfg.channels:
+        if _norm_chan(c) in NO_ACCESS:
+            continue
         await log(ctx, f"Читаю канал {c}")
         if ctx.chat_data.get("stop"):
             break
@@ -1089,6 +1101,8 @@ async def run_pop_all(ctx, limit: int | None = None) -> bool:
     ctx.chat_data["stop"] = False
     ctx.chat_data["sent"] = 0
     for c in cfg.channels:
+        if _norm_chan(c) in NO_ACCESS:
+            continue
         if ctx.chat_data.get("stop"):
             break
         await log(ctx, f"Читаю канал {c}")
@@ -1116,6 +1130,12 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     cfg = get_cfg(ctx)
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
+        return True
+    if _norm_chan(chan) in NO_ACCESS:
+        await ctx.bot.send_message(
+            ctx.chat_data["target_chat"],
+            "Бот не имеет доступа к этому каналу",
+        )
         return True
     await start_tg_client()
     await log(ctx, f"Ищем популярные посты в {chan}")
@@ -1150,6 +1170,8 @@ async def run_recent_all(ctx, days: int) -> bool:
     cfg = get_cfg(ctx)
     attempts_total = 0
     for c in cfg.channels:
+        if _norm_chan(c) in NO_ACCESS:
+            continue
         if ctx.chat_data.get("stop"):
             break
         await log(ctx, f"Читаю канал {c}")
@@ -1174,6 +1196,12 @@ async def run_recent_channel(ctx, chan: str, days: int) -> bool:
     cfg = get_cfg(ctx)
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
+        return True
+    if _norm_chan(chan) in NO_ACCESS:
+        await ctx.bot.send_message(
+            ctx.chat_data["target_chat"],
+            "Бот не имеет доступа к этому каналу",
+        )
         return True
     await start_tg_client()
     await log(ctx, f"Поиск постов за последние {days} дней в {chan}")
@@ -1208,6 +1236,12 @@ async def run_channel(
     cfg = get_cfg(ctx)
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
+        return True
+    if _norm_chan(chan) in NO_ACCESS:
+        await ctx.bot.send_message(
+            ctx.chat_data["target_chat"],
+            "Бот не имеет доступа к этому каналу",
+        )
         return True
     await start_tg_client()
     await log(ctx, f"Парсим {chan}")
