@@ -1232,7 +1232,12 @@ async def on_error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ────────────── MAIN ───────────────────────────────────────────────────────
 def main():
     # validate Telegram credentials once at startup to fail fast if incorrect
-    asyncio.run(verify_tg_credentials())
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:  # no current loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    loop.run_until_complete(verify_tg_credentials())
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -1242,4 +1247,6 @@ def main():
 
     print("Bot running…  (Ctrl+C to stop)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-if __name__ == "__main__":    main()
+
+if __name__ == "__main__":
+    main()
