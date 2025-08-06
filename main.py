@@ -31,7 +31,7 @@ from telegram.ext import (
 
 from telethon import TelegramClient
 from telethon.tl.types import Message
-from telethon.errors import ApiIdInvalidError
+from telethon.errors import ApiIdInvalidError, BotMethodInvalidError
 from openai import OpenAI
 
 # ────────────── КОНФИГ ─────────────────────────────────────────────────────
@@ -66,10 +66,19 @@ tg_client     = TelegramClient(
     "seo_news_session", TG_API_ID, TG_API_HASH, timeout=10
 )
 
+SESSION_PATH = Path("seo_news_session.session")
+USE_BOT_AUTH = not SESSION_PATH.exists()
+
+async def start_tg_client() -> None:
+    if USE_BOT_AUTH:
+        await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    else:
+        await tg_client.start()
+
 async def verify_tg_credentials() -> None:
     """Check that ``TG_API_ID``/``TG_API_HASH`` are valid before starting."""
     try:
-        await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+        await start_tg_client()
     except ApiIdInvalidError as exc:  # pragma: no cover - network required
         raise RuntimeError(
             "TG_API_ID and TG_API_HASH are invalid. Obtain valid values at "
@@ -322,6 +331,9 @@ async def fetch_posts(
             ]
         else:
             raise
+    except BotMethodInvalidError:
+        logging.error("Bot user cannot access messages in %s; provide a user session", channel)
+        return []
     except Exception:
         logging.exception("Failed to fetch posts")
         return []
@@ -477,7 +489,7 @@ CANCEL_KB = ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True)
 
 
 async def make_channel_kb(chans: list[str], ctx: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     lookup: dict[str, str] = {}
     names: list[str] = []
     for idx, c in enumerate(chans, 1):
@@ -721,7 +733,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if mode == "add_channels":
         new_channels = [c.strip().lstrip("@") for c in text.split(",") if c.strip()]
         added = []
-        await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+        await start_tg_client()
         for c in new_channels:
             try:
                 ent = await tg_client.get_entity(c)
@@ -1041,7 +1053,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # -------------- задачи -----------------------------------------------------
 async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, limit: int | None = None) -> bool:
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     await log(ctx, "Запускаю обход всех каналов")
     from_dt = datetime.strptime(from_d, "%d.%m.%Y") if from_d else None
     to_dt   = datetime.strptime(to_d, "%d.%m.%Y") if to_d else None
@@ -1071,7 +1083,7 @@ async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, l
     return msg not in {"Введите количество постов больше, бот ничего не нашёл", ATTEMPT_MSG}
 
 async def run_pop_all(ctx, limit: int | None = None) -> bool:
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     await log(ctx, "Ищем популярные посты во всех каналах")
     cfg = get_cfg(ctx)
     ctx.chat_data["stop"] = False
@@ -1105,7 +1117,7 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     await log(ctx, f"Ищем популярные посты в {chan}")
     ctx.chat_data["stop"] = False
     ctx.chat_data["sent"] = 0
@@ -1129,7 +1141,7 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     return msg != "Введите количество постов больше, бот ничего не нашёл"
 
 async def run_recent_all(ctx, days: int) -> bool:
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     await log(ctx, f"Поиск постов за последние {days} дней во всех каналах")
     from_dt = datetime.now() - timedelta(days=days)
     to_dt = datetime.now()
@@ -1163,7 +1175,7 @@ async def run_recent_channel(ctx, chan: str, days: int) -> bool:
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     await log(ctx, f"Поиск постов за последние {days} дней в {chan}")
     from_dt = datetime.now() - timedelta(days=days)
     to_dt = datetime.now()
@@ -1197,7 +1209,7 @@ async def run_channel(
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    await start_tg_client()
     await log(ctx, f"Парсим {chan}")
     from_dt = datetime.strptime(from_d, "%d.%m.%Y") if from_d else None
     to_dt   = datetime.strptime(to_d, "%d.%m.%Y") if to_d else None

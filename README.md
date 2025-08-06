@@ -44,4 +44,8 @@ python main.py
 The bot will automatically use this session; otherwise it connects via the
 `TELEGRAM_BOT_TOKEN`.
 
+Without a session file, Telethon is logged in as a bot and cannot read the
+history of private channels or any channel that disallows bots; such attempts
+result in a `BotMethodInvalidError`.
+
 For persistent running on a server via SSH, consider using `screen` or `tmux`, or configure a systemd service.
