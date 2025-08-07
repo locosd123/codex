@@ -1,9 +1,7 @@
 {
     "together_prompt_api": "d35a7b8f3906533c0df18e7cb40f0314ae836c2f5b41405be834a4e7335a9689",
-    "together_image_api": "",
     "leonardo_api": "932a2703-21e1-4a22-ae7b-866878c0b72e",
     "prompt_source": "lmstudio",
-    "flux_model": "none",
     "save_dir": "C:/Users/maxdl/Downloads",
     "threads": "1",
     "default_image_url": "",

@@ -84,14 +84,12 @@ SHARP_PROMPT_SUFFIX = (
     " Ensure the final image is perfectly sharp, high definition, and crisp, with no blurriness."
 )
 
-# --- НОВЫЕ КОНСТАНТЫ для FLUX моделей ---
-FLUX_SCHNELL_MODEL_NAME = "black-forest-labs/FLUX.1-schnell"
-FLUX_DEV_MODEL_NAME = "black-forest-labs/FLUX.1-dev"
-FLUX_IMAGE_WIDTH  = 1024
-FLUX_IMAGE_HEIGHT = 576
-FLUX_IMAGE_STEPS = 12  # Уменьшено до 12 для баланса скорости и качества (можно вернуть 20 если нужно)
-FLUX_IMAGE_N = 1
+# --- Параметры генерации изображений ---
+IMAGE_WIDTH = 1024
+IMAGE_HEIGHT = 576
+IMAGE_STEPS = 12  # Уменьшено до 12 для баланса скорости и качества (можно вернуть 20 если нужно)
 SEED_NUMBER = 1
+LEONARDO_MODEL_ID = "b0f2b3d4-1d28-4f6f-9a1d-9a1234567890"
 
 DEFAULT_NEGATIVE_PROMPT = (
     "ugly, tiling, poorly drawn hands, poorly drawn feet, poorly drawn face, out of frame, extra limbs, disfigured, deformed, body out of frame, "
@@ -106,12 +104,6 @@ DEFAULT_NEGATIVE_PROMPT = (
     "mismatched_eyes, asymmetrical_face, conjoined, nsfw, nude, explicit"
 )
 
-# --- Параметры контроля нагрузки для FLUX ---
-FLUX_MAX_CONCURRENT = 3
-FLUX_BASE_DELAY = 1.0
-FLUX_MAX_RETRIES = 4
-flux_semaphore = threading.Semaphore(FLUX_MAX_CONCURRENT)
-
 # --- Константы для Leonardo AI ---
 LEONARDO_GENERATE_URL = "https://cloud.leonardo.ai/api/rest/v1/generations"
 LEONARDO_GET_URL = "https://cloud.leonardo.ai/api/rest/v1/generations/{id}"
@@ -123,20 +115,6 @@ LEONARDO_POLL_ATTEMPTS = 20
 LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
 LMSTUDIO_MODEL = "llava-phi-3-mini"
 LMSTUDIO_MAX_RETRIES = 3
-
-# --- Константы для локального ComfyUI ---
-COMFYUI_URL = "http://127.0.0.1:8188"
-# Путь к workflow для генерации изображений через ComfyUI (FLUX Dev)
-# Используем основной файл конфигурации, который должен находиться
-# рядом с исполняемым скриптом
-COMFYUI_WORKFLOW_FILE = os.path.join(application_path, "flux_dev_checkpoint.json")
-COMFYUI_MAX_RETRIES = 3
-COMFYUI_POLL_INTERVAL = 2
-# Увеличено время ожидания результата до ~10 минут на картинку
-# (300 попыток по 2 секунды каждая)
-COMFYUI_POLL_ATTEMPTS = 300
-# Таймаут в секундах для HTTP-запросов к локальному ComfyUI
-COMFYUI_REQUEST_TIMEOUT = 180
 
 script_dir = application_path
 images_dir = os.path.join(script_dir, "Images")
@@ -192,14 +170,6 @@ def update_chromedriver() -> str:
         log_message(f"Ошибка обновления ChromeDriver: {e}", level=logging.ERROR)
         return driver_path
 
-
-def check_comfyui_server() -> bool:
-    """Return True if local ComfyUI server responds, False otherwise."""
-    try:
-        resp = requests.get(f"{COMFYUI_URL}/queue", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
 
 
 # --- Настройка логирования ---
@@ -290,7 +260,7 @@ def load_settings():
 
 def save_settings():
     global folder_data, app
-    if not app or not entry_together_prompt.winfo_exists() or not entry_together_image.winfo_exists():
+    if not app or not entry_together_prompt.winfo_exists():
         log_message("Попытка сохранить настройки до полной инициализации GUI. Пропуск.", level=logging.WARNING)
         return {}
 
@@ -341,20 +311,11 @@ def save_settings():
     if entry_threads and entry_threads.winfo_exists():
         threads_value = entry_threads.get().strip()
 
-    if flux_dev_var.get():
-        flux_model = "dev"
-    elif flux_schnell_var.get():
-        flux_model = "schnell"
-    else:
-        flux_model = "none"
-
     prompt_source = "lmstudio" if prompt_lmstudio_var.get() else "together"
     cfg = {
         "together_prompt_api": entry_together_prompt.get().strip(),
-        "together_image_api": entry_together_image.get().strip(),
         "leonardo_api": entry_leonardo.get().strip(),
         "prompt_source": prompt_source,
-        "flux_model": flux_model,
         "save_dir": entry_save_dir.get().strip(),
         "threads": threads_value,
         "default_image_url": entry_url_default.get().strip(),
@@ -410,118 +371,6 @@ def cleanup_temp_files(*files):
                             level=logging.WARNING)
 
 
-# --- Универсальная функция для API FLUX (schnell/dev) ---
-def call_flux_with_retry(prompt: str, together_key: str, model_name: str):
-    if stop_requested.is_set():
-        raise RuntimeError("Генерация FLUX прервана пользователем перед запросом.")
-
-    last_exception = None
-    for attempt in range(FLUX_MAX_RETRIES):
-        if stop_requested.is_set():
-            raise RuntimeError(
-                f"Генерация FLUX ({model_name}) прервана пользователем во время ожидания (попытка {attempt + 1}).")
-
-        acquired = flux_semaphore.acquire(timeout=60)
-        if not acquired:
-            last_exception = TimeoutError("Timeout waiting for FLUX semaphore")
-            log_message(f"FLUX ({model_name}): Таймаут ожидания семафора (попытка {attempt + 1})", level=logging.WARNING)
-            continue
-
-        try:
-            delay = FLUX_BASE_DELAY * (2 ** attempt)
-            log_message(f"FLUX ({model_name}): Попытка {attempt + 1}/{FLUX_MAX_RETRIES}, задержка {delay:.2f} сек...")
-
-            time.sleep(min(delay, 1.0))
-            if stop_requested.is_set():
-                raise RuntimeError(
-                    f"Генерация FLUX ({model_name}) прервана пользователем перед запросом (попытка {attempt + 1}).")
-
-            client = Together(api_key=together_key)
-            response = client.images.generate(
-                prompt=prompt,
-                model=model_name,
-                negative_prompt=DEFAULT_NEGATIVE_PROMPT,  # Добавлено
-                width=FLUX_IMAGE_WIDTH,
-                height=FLUX_IMAGE_HEIGHT,
-                steps=FLUX_IMAGE_STEPS,  # Используется обновленное значение
-                n=FLUX_IMAGE_N,
-                seed=SEED_NUMBER,
-                response_format="b64_json",
-            )
-
-            if response and response.data and len(response.data) > 0 and response.data[0].b64_json:
-                log_message(f"FLUX ({model_name}): Изображение успешно сгенерировано (попытка {attempt + 1}).")
-                return response.data[0].b64_json
-            else:
-                # Попытка получить детали ошибки из ответа, если они есть
-                error_detail = getattr(response, 'error', str(response))
-                log_message(f"FLUX ({model_name}): Некорректный ответ от API (попытка {attempt + 1}): {error_detail}",
-                            level=logging.ERROR)
-                last_exception = RuntimeError(f"FLUX API returned unexpected response: {error_detail}")
-                # Можно добавить break, если ответ явно указывает на неповторяемую ошибку
-
-        except requests.exceptions.HTTPError as http_err:
-            status_code = http_err.response.status_code if http_err.response else None
-            try:
-                # Попытка извлечь сообщение об ошибке из JSON тела ответа
-                error_details = http_err.response.json()
-                error_text = error_details.get('message', str(http_err))  # Часто ошибка в поле 'message'
-                error_type = error_details.get('type_', '')  # Together иногда использует 'type_'
-            except json.JSONDecodeError:
-                error_text = http_err.response.text if http_err.response else str(http_err)
-                error_type = ''
-
-            log_message(
-                f"FLUX ({model_name}): HTTP ошибка {status_code}: {error_text} (Type: {error_type}, Попытка {attempt + 1}).",
-                level=logging.ERROR)
-            last_exception = http_err
-
-            # --- ИСПРАВЛЕНО: Обработка NSFW ошибки ---
-            if status_code == 422 and "nsfw content" in error_text.lower():
-                log_message(f"FLUX ({model_name}): Ошибка 422 (NSFW): {error_text}. Промпт: {prompt[:100]}...",
-                            level=logging.WARNING)
-                break  # Прерываем ретраи для этой ошибки
-            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-            elif status_code == 400:  # Bad Request (например, невалидный параметр)
-                log_message(f"FLUX ({model_name}): Ошибка 400 Bad Request: {error_text}. Промпт: {prompt[:100]}...",
-                            level=logging.ERROR)
-                break  # Не повторяем при 400 (не Rate Limit)
-            elif status_code == 429 or (status_code and status_code >= 500):  # Rate Limit или Серверная ошибка
-                log_message(f"FLUX ({model_name}): Ошибка {status_code}, повтор...", level=logging.WARNING)
-                # Продолжаем цикл (неявный continue)
-            else:  # Другие HTTP ошибки
-                break  # Не повторяем
-        except requests.exceptions.RequestException as req_err:
-            log_message(f"FLUX ({model_name}): Ошибка сети или запроса (попытка {attempt + 1}): {req_err}",
-                        level=logging.ERROR)
-            last_exception = req_err
-        except Exception as e:  # Другие непредвиденные ошибки (например, от библиотеки Together)
-            log_message(f"FLUX ({model_name}): Непредвиденная ошибка (попытка {attempt + 1}): {type(e).__name__} - {e}",
-                        level=logging.CRITICAL)
-            logging.exception("Traceback непредвиденной ошибки FLUX:")
-            last_exception = e
-            break  # Не повторяем при неизвестных ошибках
-        finally:
-            if acquired:  # Освобождаем семафор только если он был захвачен
-                flux_semaphore.release()
-                log_message(f"FLUX ({model_name}): Семафор освобожден (попытка {attempt + 1})", level=logging.DEBUG)
-
-    # Выход из цикла ретраев
-    error_msg = f"FLUX ({model_name}): Не удалось сгенерировать изображение после всех попыток."
-    if last_exception:
-        # Передаем последнюю ошибку для более детального логгирования в worker
-        raise RuntimeError(
-            f"{error_msg} Последняя ошибка: {type(last_exception).__name__} - {last_exception}") from last_exception
-    else:
-        # Если вышли из цикла без исключений, но и без результата (маловероятно, но возможно)
-        raise RuntimeError(error_msg)
-
-
-def call_flux_schnell_with_retry(prompt: str, together_key: str):
-    return call_flux_with_retry(prompt, together_key, FLUX_SCHNELL_MODEL_NAME)
-
-
-
 # --- Функция для API Leonardo AI ---
 def call_leonardo_with_retry(prompt: str, leonardo_key: str):
     if stop_requested.is_set():
@@ -533,11 +382,12 @@ def call_leonardo_with_retry(prompt: str, leonardo_key: str):
         "Accept": "application/json",
     }
     payload = {
+        "modelId": LEONARDO_MODEL_ID,
         "prompt": prompt,
         "num_images": 1,
-        "width": FLUX_IMAGE_WIDTH,
-        "height": FLUX_IMAGE_HEIGHT,
-        "steps": FLUX_IMAGE_STEPS,
+        "width": IMAGE_WIDTH,
+        "height": IMAGE_HEIGHT,
+        "steps": IMAGE_STEPS,
         "seed": SEED_NUMBER,
         "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
     }
@@ -550,7 +400,9 @@ def call_leonardo_with_retry(prompt: str, leonardo_key: str):
 
             log_message(f"Leonardo AI: попытка {attempt + 1}/{LEONARDO_MAX_RETRIES} отправки запроса...")
             resp = requests.post(LEONARDO_GENERATE_URL, headers=headers, json=payload, timeout=60)
-            resp.raise_for_status()
+            if not resp.ok:
+                log_message(f"Leonardo AI: HTTP {resp.status_code}: {resp.text}", level=logging.ERROR)
+                resp.raise_for_status()
             data = resp.json()
             gen_id = data.get("sdGenerationJob", {}).get("generationId") or data.get("generationId")
             if not gen_id:
@@ -580,149 +432,10 @@ def call_leonardo_with_retry(prompt: str, leonardo_key: str):
     raise RuntimeError(f"Leonardo AI: не удалось сгенерировать изображение. Последняя ошибка: {last_exc}")
 
 
-# --- Функция для локального ComfyUI (FLUX DEV) ---
-def call_comfyui_flux_dev_with_retry(prompt: str):
-    if stop_requested.is_set():
-        raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
-
-    try:
-        # Читаем workflow в UTF-8, при ошибке пробуем с BOM
-        try:
-            with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8") as wf:
-                workflow = json.load(wf)
-        except json.JSONDecodeError:
-            with open(COMFYUI_WORKFLOW_FILE, "r", encoding="utf-8-sig") as wf:
-                workflow = json.load(wf)
-    except Exception as e:
-        raise RuntimeError(
-            f"Не удалось загрузить workflow ComfyUI: {e}") from e
-
-    def _replace_prompt(obj):
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if isinstance(v, str) and ("__PROMPT__" in v or "{{prompt}}" in v):
-                    obj[k] = v.replace("__PROMPT__", prompt).replace("{{prompt}}", prompt)
-                else:
-                    _replace_prompt(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                _replace_prompt(item)
-
-    workflow_copy = copy.deepcopy(workflow)
-    _replace_prompt(workflow_copy)
-
-    client_id = f"codex_{int(time.time()*1000)}_{random.randint(0,9999)}"
-    payload = {"prompt": workflow_copy, "client_id": client_id}
-
-    last_exc = None
-    if not check_comfyui_server():
-        raise RuntimeError(
-            f"ComfyUI сервер недоступен по адресу {COMFYUI_URL}. "
-            "Убедитесь, что ComfyUI запущен."
-        )
-
-    for attempt in range(COMFYUI_MAX_RETRIES):
-        try:
-            if stop_requested.is_set():
-                raise RuntimeError("Генерация ComfyUI прервана пользователем перед запросом.")
-            log_message(f"ComfyUI: попытка {attempt + 1}/{COMFYUI_MAX_RETRIES} отправки запроса...")
-            resp = requests.post(
-                f"{COMFYUI_URL}/prompt",
-                json=payload,
-                timeout=COMFYUI_REQUEST_TIMEOUT,
-            )
-            resp.raise_for_status()
-            resp_data = resp.json()
-            prompt_id = resp_data.get("prompt_id")
-            if not prompt_id:
-                raise RuntimeError("ComfyUI не вернул prompt_id")
-
-            for _ in range(COMFYUI_POLL_ATTEMPTS):
-                if stop_requested.is_set():
-                    raise RuntimeError("Генерация ComfyUI прервана пользователем во время ожидания результата.")
-                hist_resp = requests.get(
-                    f"{COMFYUI_URL}/history/{prompt_id}", timeout=COMFYUI_REQUEST_TIMEOUT
-                )
-                hist_resp.raise_for_status()
-                hist = hist_resp.json()
-                prompt_info = hist.get(prompt_id)
-                if not prompt_info:
-                    time.sleep(COMFYUI_POLL_INTERVAL)
-                    continue
-                outputs = prompt_info.get("outputs", {})
-                for node_output in outputs.values():
-                    images = node_output.get("images") or []
-                    if images:
-                        info = images[0]
-                        params = {
-                            "filename": info.get("filename"),
-                            "subfolder": info.get("subfolder", ""),
-                            "type": info.get("type", "output"),
-                        }
-                        img_resp = requests.get(
-                            f"{COMFYUI_URL}/view",
-                            params=params,
-                            timeout=COMFYUI_REQUEST_TIMEOUT,
-                        )
-                        img_resp.raise_for_status()
-                        return base64.b64encode(img_resp.content).decode("utf-8")
-                time.sleep(COMFYUI_POLL_INTERVAL)
-            raise RuntimeError("Истекло время ожидания результата ComfyUI.")
-        except Exception as e:
-            last_exc = e
-            log_message(f"ComfyUI: ошибка на попытке {attempt + 1}: {e}", level=logging.ERROR)
-            time.sleep(2 * (attempt + 1))
-    raise RuntimeError(f"ComfyUI: не удалось сгенерировать изображение. Последняя ошибка: {last_exc}")
-
-
-# --- Функция для локального LM Studio ---
-def call_lmstudio_with_retry(data_uri: str):
-    if stop_requested.is_set():
-        raise RuntimeError("Генерация LM Studio прервана пользователем перед запросом.")
-
-    payload = {
-        "model": LMSTUDIO_MODEL,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": PROMPT},
-                {"type": "image_url", "image_url": {"url": data_uri}}
-            ]
-        }],
-        "stream": False,
-        "max_tokens": 1024
-    }
-
-    last_exc = None
-    for attempt in range(LMSTUDIO_MAX_RETRIES):
-        try:
-            if stop_requested.is_set():
-                raise RuntimeError("Генерация LM Studio прервана пользователем перед запросом.")
-            log_message(f"LM Studio: попытка {attempt + 1}/{LMSTUDIO_MAX_RETRIES} отправки запроса...")
-            resp = requests.post(LMSTUDIO_URL, json=payload, timeout=60)
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("choices"):
-                choice = data["choices"][0]
-                message = choice.get("message", {})
-                content = message.get("content") or choice.get("content")
-                if content:
-                    return content.strip()
-            raise RuntimeError("LM Studio не вернул валидный ответ.")
-        except Exception as e:
-            last_exc = e
-            log_message(f"LM Studio: ошибка на попытке {attempt + 1}: {e}", level=logging.ERROR)
-            time.sleep(2 * (attempt + 1))
-    raise RuntimeError(f"LM Studio: не удалось получить промпт. Последняя ошибка: {last_exc}")
-
-
-# --- Функция рабочего потока ---
 def worker(task_id, task_data):
     image_path_or_url = task_data['image_path_or_url']
-    provider = task_data.get('provider', 'flux_schnell')
     prompt_provider = task_data.get('prompt_provider', 'together')
     prompt_key = task_data.get('prompt_key', '')
-    image_key = task_data.get('image_key', '')
     leonardo_key = task_data.get('leonardo_key', '')
     target_save_dir = task_data['save_dir']
     names_list = task_data['names_list']
@@ -749,16 +462,8 @@ def worker(task_id, task_data):
             elif prompt_provider != 'lmstudio':
                 raise ValueError(f"{log_prefix} Неизвестный источник промпта: {prompt_provider}")
 
-            if provider == 'flux_schnell':
-                if not image_key:
-                    raise ValueError(f"{log_prefix} Отсутствует API ключ Together (image).")
-            elif provider == 'flux_dev':
-                pass  # локальная генерация через ComfyUI, ключ не требуется
-            elif provider == 'leonardo':
-                if not leonardo_key:
-                    raise ValueError(f"{log_prefix} Отсутствует API ключ Leonardo AI.")
-            else:
-                raise ValueError(f"{log_prefix} Неизвестный провайдер изображений: {provider}")
+            if not leonardo_key:
+                raise ValueError(f"{log_prefix} Отсутствует API ключ Leonardo AI.")
 
             # Шаг 1: Получение исходного изображения
             log_message(f"{log_prefix} Загрузка изображения из: {image_path_or_url} (Попытка worker {attempt})")
@@ -795,31 +500,30 @@ def worker(task_id, task_data):
                 raise RuntimeError("Задача прервана пользователем перед запросом к сервису промпта.")
 
             together_prompt_content = PROMPT
-            if provider.startswith('flux'):
-                if prompt_provider == 'together':
-                    log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
-                    chat_client = Together(api_key=prompt_key)
-                    try:
-                        resp_chat = chat_client.chat.completions.create(
-                            model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
-                            messages=[{"role": "user", "content": [{"type": "text", "text": PROMPT},
+            if prompt_provider == 'together':
+                log_message(f"{log_prefix} Запрос к Together.ai Chat для улучшения промпта...")
+                chat_client = Together(api_key=prompt_key)
+                try:
+                    resp_chat = chat_client.chat.completions.create(
+                        model="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
+                        messages=[{"role": "user", "content": [{"type": "text", "text": PROMPT},
                                                                    {"type": "image_url", "image_url": {"url": data_uri}}]}],
-                            stream=False,
-                            max_tokens=1024
-                        )
-                        if not resp_chat.choices:
-                            raise ValueError("Chat API вернул ответ без 'choices'.")
-                        together_prompt_content = resp_chat.choices[0].message.content.strip()
-                        if not together_prompt_content:
-                            raise ValueError("Chat API вернул пустое сообщение в 'choices'.")
-                        log_message(f"{log_prefix} Получен промпт от Together.ai Chat (длина {len(together_prompt_content)}).")
-                    except Exception as chat_err:
-                        log_message(f"{log_prefix} Ошибка при запросе к Together.ai Chat: {chat_err}", level=logging.ERROR)
-                        raise RuntimeError(
-                            f"Ошибка получения промпта от Chat API: {chat_err}") from chat_err
-                else:
-                    log_message(f"{log_prefix} Запрос к локальному LM Studio для улучшения промпта...")
-                    together_prompt_content = call_lmstudio_with_retry(data_uri)
+                        stream=False,
+                        max_tokens=1024
+                    )
+                    if not resp_chat.choices:
+                        raise ValueError("Chat API вернул ответ без 'choices'.")
+                    together_prompt_content = resp_chat.choices[0].message.content.strip()
+                    if not together_prompt_content:
+                        raise ValueError("Chat API вернул пустое сообщение в 'choices'.")
+                    log_message(f"{log_prefix} Получен промпт от Together.ai Chat (длина {len(together_prompt_content)}).")
+                except Exception as chat_err:
+                    log_message(f"{log_prefix} Ошибка при запросе к Together.ai Chat: {chat_err}", level=logging.ERROR)
+                    raise RuntimeError(
+                        f"Ошибка получения промпта от Chat API: {chat_err}") from chat_err
+            else:
+                log_message(f"{log_prefix} Запрос к локальному LM Studio для улучшения промпта...")
+                together_prompt_content = call_lmstudio_with_retry(data_uri)
 
             # Шаг 4: Формирование финального промпта
             selected_prefix = random.choice(DEFAULT_PREFIXES)
@@ -834,15 +538,8 @@ def worker(task_id, task_data):
                 raise RuntimeError("Задача прервана пользователем перед генерацией изображения.")
 
             # Шаг 5: Генерация изображения
-            if provider == 'flux_schnell':
-                log_message(f"{log_prefix} Отправка промпта в FLUX.1-schnell...")
-                b64_image_data = call_flux_schnell_with_retry(final_prompt_for_image, image_key)
-            elif provider == 'flux_dev':
-                log_message(f"{log_prefix} Отправка промпта в локальный ComfyUI (FLUX DEV)...")
-                b64_image_data = call_comfyui_flux_dev_with_retry(final_prompt_for_image)
-            else:
-                log_message(f"{log_prefix} Отправка промпта в Leonardo.ai...")
-                b64_image_data = call_leonardo_with_retry(final_prompt_for_image, leonardo_key)
+            log_message(f"{log_prefix} Отправка промпта в Leonardo.ai...")
+            b64_image_data = call_leonardo_with_retry(final_prompt_for_image, leonardo_key)
 
             if not b64_image_data:
                 raise RuntimeError(f"{log_prefix} API не вернул данные изображения после ретраев.")
@@ -1214,27 +911,16 @@ def generate_thread():
         return
 
     together_prompt_key = cfg.get("together_prompt_api")
-    together_image_key = cfg.get("together_image_api")
     prompt_source = cfg.get("prompt_source", "together")
-    flux_model = cfg.get("flux_model", "schnell")
     leonardo_key = cfg.get("leonardo_api")
     main_save_dir = cfg.get("save_dir")
     threads_str = cfg.get("threads", "1")
 
     errors = []
-    using_flux = flux_model in ("schnell", "dev")
-    if using_flux:
-        if leonardo_key:
-            errors.append("Нельзя одновременно использовать FLUX и Leonardo AI.")
-        if flux_model == "schnell" and not together_image_key:
-            errors.append("Нужен Together Image ключ для FLUX.schnell.")
-        if prompt_source == 'together' and not together_prompt_key:
-            errors.append("Нужен Together Prompt ключ для FLUX.")
-    else:
-        if not leonardo_key:
-            errors.append("Требуется ключ Leonardo AI.")
-        if prompt_source == 'together' and not together_prompt_key:
-            errors.append("Требуется Together Prompt Key.")
+    if not leonardo_key:
+        errors.append("Требуется ключ Leonardo AI.")
+    if prompt_source == 'together' and not together_prompt_key:
+        errors.append("Требуется Together Prompt Key.")
     if not main_save_dir:
         errors.append("Требуется указать основную папку для сохранения.")
     # Проверка существования и доступности папки сохранения
@@ -1280,30 +966,16 @@ def generate_thread():
                     names_list) else ""
                 current_name = f"{current_name_base}{name_suffix}"
 
-                if using_flux:
-                    provider = 'flux_dev' if flux_model == 'dev' else 'flux_schnell'
-                    task_info = {
-                        'task_id': f"default_{task_counter}",
-                        'image_path_or_url': default_url,
-                        'save_dir': main_save_dir,
-                        'names_list': [current_name],
-                        'is_folder_task': False,
-                        'provider': provider,
-                        'prompt_provider': prompt_source,
-                        'prompt_key': together_prompt_key,
-                        'image_key': together_image_key
-                    }
-                else:
-                    task_info = {
-                        'task_id': f"default_{task_counter}",
-                        'image_path_or_url': default_url,
-                        'save_dir': main_save_dir,
-                        'names_list': [current_name],
-                        'is_folder_task': False,
-                        'provider': 'leonardo',
-                        'prompt_provider': prompt_source,
-                        'leonardo_key': leonardo_key
-                    }
+                task_info = {
+                    'task_id': f"default_{task_counter}",
+                    'image_path_or_url': default_url,
+                    'save_dir': main_save_dir,
+                    'names_list': [current_name],
+                    'is_folder_task': False,
+                    'prompt_provider': prompt_source,
+                    'prompt_key': together_prompt_key,
+                    'leonardo_key': leonardo_key
+                }
                 tasks_to_run.append(task_info)
             log_message(f"Создано {len(tasks_to_run)} задач для обычной генерации.")
 
@@ -1367,32 +1039,17 @@ def generate_thread():
 
                         current_name = f"{current_name_base}{name_suffix}"
 
-                        if using_flux:
-                            provider = 'flux_dev' if flux_model == 'dev' else 'flux_schnell'
-                            task_info = {
-                                'task_id': f"folder_{folder_name_val}_{task_counter}",
-                                'image_path_or_url': folder_url_val,
-                                'save_dir': target_folder_dir_val,
-                                'names_list': [current_name],
-                                'is_folder_task': True,
-                                'folder_name': folder_name_val,
-                                'provider': provider,
-                                'prompt_provider': prompt_source,
-                                'prompt_key': together_prompt_key,
-                                'image_key': together_image_key
-                            }
-                        else:
-                            task_info = {
-                                'task_id': f"folder_{folder_name_val}_{task_counter}",
-                                'image_path_or_url': folder_url_val,
-                                'save_dir': target_folder_dir_val,
-                                'names_list': [current_name],
-                                'is_folder_task': True,
-                                'folder_name': folder_name_val,
-                                'provider': 'leonardo',
-                                'prompt_provider': prompt_source,
-                                'leonardo_key': leonardo_key
-                            }
+                        task_info = {
+                            'task_id': f"folder_{folder_name_val}_{task_counter}",
+                            'image_path_or_url': folder_url_val,
+                            'save_dir': target_folder_dir_val,
+                            'names_list': [current_name],
+                            'is_folder_task': True,
+                            'folder_name': folder_name_val,
+                            'prompt_provider': prompt_source,
+                            'prompt_key': together_prompt_key,
+                            'leonardo_key': leonardo_key
+                        }
                         tasks_to_run.append(task_info)
             log_message(f"Найдено {checked_folders_count} отмеченных папок. Создано {total_folder_tasks} задач.")
             if not tasks_to_run and checked_folders_count > 0:
@@ -1742,7 +1399,7 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 app = ctk.CTk()
-app.title("Генератор Изображений (Together Chat → Together Image FLUX.1)")
+app.title("Генератор Изображений (Leonardo.ai)")
 app.geometry("1000x700")
 app.minsize(800, 600)
 app.update()
@@ -1826,29 +1483,8 @@ checkbox_prompt_together.pack(side="left", padx=(5,2))
 checkbox_prompt_lmstudio = ctk.CTkCheckBox(prompt_source_frame, text="LM Studio (llava-phi-3-mini)", variable=prompt_lmstudio_var, command=lambda: _on_prompt_toggle('lmstudio'))
 checkbox_prompt_lmstudio.pack(side="left", padx=(5,0))
 
-together_image_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
-together_image_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
-together_image_frame.grid_columnconfigure(1, weight=1)
-ctk.CTkLabel(together_image_frame, text="Together Image Key:").grid(row=0, column=0, padx=(0, 5))
-entry_together_image = ctk.CTkEntry(together_image_frame, placeholder_text="Ключ Together для картинок...", show="*")
-entry_together_image.grid(row=0, column=1, sticky="ew")
-
-flux_schnell_var = ctk.IntVar(value=1)
-flux_dev_var = ctk.IntVar(value=0)
-
-def _on_flux_toggle(model):
-    if model == 'schnell' and flux_schnell_var.get():
-        flux_dev_var.set(0)
-    elif model == 'dev' and flux_dev_var.get():
-        flux_schnell_var.set(0)
-
-checkbox_flux_schnell = ctk.CTkCheckBox(together_image_frame, text="FLUX.1 Schnell ($0.003)", variable=flux_schnell_var, command=lambda: _on_flux_toggle('schnell'))
-checkbox_flux_schnell.grid(row=1, column=0, sticky="w", padx=(5, 2))
-checkbox_flux_dev = ctk.CTkCheckBox(together_image_frame, text="FLUX DEV (ComfyUI)", variable=flux_dev_var, command=lambda: _on_flux_toggle('dev'))
-checkbox_flux_dev.grid(row=1, column=1, sticky="w", padx=(5, 0))
-
 leonardo_frame = ctk.CTkFrame(common_settings_frame, fg_color="transparent")
-leonardo_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+leonardo_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
 ctk.CTkLabel(leonardo_frame, text="Leonardo AI Key:").pack(side="left", padx=(0, 5))
 entry_leonardo = ctk.CTkEntry(leonardo_frame, placeholder_text="Введите ваш ключ от Leonardo AI...", show="*")
 entry_leonardo.pack(side="left", fill="x", expand=True)
@@ -1942,13 +1578,9 @@ folder_data = []
 settings = load_settings()  # Загружает данные в глобальный folder_data
 
 entry_together_prompt.insert(0, settings.get("together_prompt_api", ""))
-entry_together_image.insert(0, settings.get("together_image_api", ""))
 prompt_source_loaded = settings.get("prompt_source", "together")
 prompt_together_var.set(1 if prompt_source_loaded == "together" else 0)
 prompt_lmstudio_var.set(1 if prompt_source_loaded == "lmstudio" else 0)
-flux_model_loaded = settings.get("flux_model", "schnell")
-flux_schnell_var.set(1 if flux_model_loaded == "schnell" else 0)
-flux_dev_var.set(1 if flux_model_loaded == "dev" else 0)
 entry_leonardo.insert(0, settings.get("leonardo_api", ""))
 entry_save_dir.insert(0, settings.get("save_dir", ""))
 if entry_threads and entry_threads.winfo_exists():
