@@ -1,9 +1,11 @@
 # bot.py ────────────────────────────────────────────────────────────────────
-import json, re, html
+import json, re, html, traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 import asyncio
 import logging
+import os
+from dotenv import load_dotenv
 try:
     import fcntl  # POSIX locking
 except ModuleNotFoundError:  # pragma: no cover - Windows fallback
@@ -28,15 +30,27 @@ from telegram.ext import (
 )
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.types import Message
+from telethon.errors import ApiIdInvalidError, BotMethodInvalidError
 from openai import OpenAI
 
 # ────────────── КОНФИГ ─────────────────────────────────────────────────────
-OPENAI_API_KEY = "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"
-TELEGRAM_BOT_TOKEN   = "7621000604:AAHrWFyNx8JCrPkCtmtC4MWAV2Ri5-EpOQo"
-TG_API_ID     = "408198196"
-TG_API_HASH = "fe7151ae181d6fb73c854dd5d6242cd"
+load_dotenv()
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TG_API_ID = os.getenv('TG_API_ID')
+TG_API_HASH = os.getenv('TG_API_HASH')
+TG_SESSION = os.getenv('TG_SESSION')
+if TG_API_ID is not None:
+    TG_API_ID = int(TG_API_ID)
 
+if not all([OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TG_API_ID, TG_API_HASH]):
+    raise RuntimeError('Environment variables OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TG_API_ID and TG_API_HASH must be set')
+
+ADMIN_ID = os.getenv('ADMIN_ID')
+if ADMIN_ID is not None:
+    ADMIN_ID = int(ADMIN_ID)
 
 PROCESSED_FILE = Path("processed_ids.json")
 PROCESSED_LIMIT = 1000
@@ -50,9 +64,36 @@ ATTEMPT_MSG    = (
 
 # ────────────── ГЛОБАЛЬНЫЕ КЛИЕНТЫ ─────────────────────────────────────────
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-tg_client     = TelegramClient(
-    "seo_news_session", TG_API_ID, TG_API_HASH, timeout=10
-)
+if TG_SESSION:
+    tg_client = TelegramClient(StringSession(TG_SESSION), TG_API_ID, TG_API_HASH, timeout=10)
+    SESSION_PATH = None
+    USE_BOT_AUTH = False
+else:
+    tg_client = TelegramClient("seo_news_session", TG_API_ID, TG_API_HASH, timeout=10)
+    SESSION_PATH = Path("seo_news_session.session")
+    USE_BOT_AUTH = not SESSION_PATH.exists()
+NO_ACCESS: set[str] = set()
+
+def _norm_chan(chan: str | int) -> str:
+    return str(chan).lstrip("@")
+
+async def start_tg_client() -> None:
+    if USE_BOT_AUTH:
+        await tg_client.start(bot_token=TELEGRAM_BOT_TOKEN)
+    else:
+        await tg_client.start()
+
+async def verify_tg_credentials() -> None:
+    """Check that ``TG_API_ID``/``TG_API_HASH`` are valid before starting."""
+    try:
+        await start_tg_client()
+    except ApiIdInvalidError as exc:  # pragma: no cover - network required
+        raise RuntimeError(
+            "TG_API_ID and TG_API_HASH are invalid. Obtain valid values at "
+            "https://my.telegram.org and ensure the session file matches."
+        ) from exc
+    finally:
+        await tg_client.disconnect()
 
 async def openai_call(method, *args, timeout=60, **kwargs):
     loop = asyncio.get_running_loop()
@@ -109,12 +150,41 @@ async def log(ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     cfg = get_cfg(ctx)
     if cfg.log_enabled and ctx.chat_data.get("target_chat"):
         try:
-            await ctx.bot.send_message(ctx.chat_data["target_chat"], f"#log {text}")
+            await send_chunks(ctx.bot, ctx.chat_data["target_chat"], f"#log {text}")
         except Exception:
             logging.exception("Failed to send log message")
 
 
 # ────────────── UTIL: журнал постов ────────────────────────────────────────
+
+MAX_TEXT_LEN = 4096
+
+def split_text(text: str, limit: int = MAX_TEXT_LEN) -> list[str]:
+    parts: list[str] = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut == -1:
+            cut = limit
+        parts.append(text[:cut])
+        text = text[cut:]
+    parts.append(text)
+    return parts
+
+async def reply_chunks(msg, text: str, **kwargs) -> None:
+    parts = split_text(text)
+    for i, part in enumerate(parts):
+        if i == 0:
+            await msg.reply_text(part, **kwargs)
+        else:
+            await msg.reply_text(part)
+
+async def send_chunks(bot, chat_id, text: str, **kwargs) -> None:
+    parts = split_text(text)
+    for i, part in enumerate(parts):
+        if i == 0:
+            await bot.send_message(chat_id, part, **kwargs)
+        else:
+            await bot.send_message(chat_id, part)
 
 def build_filter_prompt(p_yes: str, p_no: str) -> str:
     return (
@@ -298,6 +368,15 @@ async def fetch_posts(
             ]
         else:
             raise
+    except BotMethodInvalidError:
+        norm = _norm_chan(channel)
+        if norm not in NO_ACCESS:
+            NO_ACCESS.add(norm)
+            logging.error(
+                "Bot user cannot access messages in %s; provide a user session",
+                channel,
+            )
+        return []
     except Exception:
         logging.exception("Failed to fetch posts")
         return []
@@ -358,13 +437,11 @@ async def process_and_send(
     src = f"@{username}" if username and not username.lstrip("-").isdigit() else chan
     src = html.escape(src)
     link_attr = f" href='{html.escape(link)}'" if link else ""
-    body = (
-        f"<b>Источник:</b> <a{link_attr}>{src}</a>\n\n"
-        f"{rewritten}{footer}"
-    )[:4090]
-    await ctx.bot.send_message(
-        chat_id=ctx.chat_data["target_chat"],
-        text=body,
+    body = f"<b>Источник:</b> <a{link_attr}>{src}</a>\n\n{rewritten}{footer}"
+    await send_chunks(
+        ctx.bot,
+        ctx.chat_data["target_chat"],
+        body,
         parse_mode=tg_const.ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -453,7 +530,7 @@ CANCEL_KB = ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True)
 
 
 async def make_channel_kb(chans: list[str], ctx: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
-    await tg_client.start()
+    await start_tg_client()
     lookup: dict[str, str] = {}
     names: list[str] = []
     for idx, c in enumerate(chans, 1):
@@ -659,15 +736,18 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if text == "📝 Заменить фильтр-промпт":
         ctx.user_data.clear()
         ctx.user_data["mode"] = "replace_prompt_yes"
-        await update.message.reply_text(
+        await reply_chunks(
+            update.message,
             "Вот текущий промпт:\n"
             "Отвечай только 'yes' или 'no'.\n"
             f"'Yes' — {cfg.prompt_yes}\n"
             f"'No' — {cfg.prompt_no}",
             reply_markup=CANCEL_KB,
         )
-        await update.message.reply_text(
-            "Введите промпт в случае если YES:", reply_markup=CANCEL_KB
+        await reply_chunks(
+            update.message,
+            "Введите промпт в случае если YES:",
+            reply_markup=CANCEL_KB,
         )
         return
     if text == "Отображать лог ?":
@@ -697,7 +777,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if mode == "add_channels":
         new_channels = [c.strip().lstrip("@") for c in text.split(",") if c.strip()]
         added = []
-        await tg_client.start()
+        await start_tg_client()
         for c in new_channels:
             try:
                 ent = await tg_client.get_entity(c)
@@ -1017,7 +1097,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # -------------- задачи -----------------------------------------------------
 async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, limit: int | None = None) -> bool:
-    await tg_client.start()
+    await start_tg_client()
     await log(ctx, "Запускаю обход всех каналов")
     from_dt = datetime.strptime(from_d, "%d.%m.%Y") if from_d else None
     to_dt   = datetime.strptime(to_d, "%d.%m.%Y") if to_d else None
@@ -1026,6 +1106,8 @@ async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, l
     cfg = get_cfg(ctx)
     attempts_total = 0
     for c in cfg.channels:
+        if _norm_chan(c) in NO_ACCESS:
+            continue
         await log(ctx, f"Читаю канал {c}")
         if ctx.chat_data.get("stop"):
             break
@@ -1047,12 +1129,14 @@ async def run_seq_all(ctx, from_d: str | None = None, to_d: str | None = None, l
     return msg not in {"Введите количество постов больше, бот ничего не нашёл", ATTEMPT_MSG}
 
 async def run_pop_all(ctx, limit: int | None = None) -> bool:
-    await tg_client.start()
+    await start_tg_client()
     await log(ctx, "Ищем популярные посты во всех каналах")
     cfg = get_cfg(ctx)
     ctx.chat_data["stop"] = False
     ctx.chat_data["sent"] = 0
     for c in cfg.channels:
+        if _norm_chan(c) in NO_ACCESS:
+            continue
         if ctx.chat_data.get("stop"):
             break
         await log(ctx, f"Читаю канал {c}")
@@ -1081,7 +1165,13 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start()
+    if _norm_chan(chan) in NO_ACCESS:
+        await ctx.bot.send_message(
+            ctx.chat_data["target_chat"],
+            "Бот не имеет доступа к этому каналу",
+        )
+        return True
+    await start_tg_client()
     await log(ctx, f"Ищем популярные посты в {chan}")
     ctx.chat_data["stop"] = False
     ctx.chat_data["sent"] = 0
@@ -1105,7 +1195,7 @@ async def run_pop_channel(ctx, chan: str, limit: int | None = None) -> bool:
     return msg != "Введите количество постов больше, бот ничего не нашёл"
 
 async def run_recent_all(ctx, days: int) -> bool:
-    await tg_client.start()
+    await start_tg_client()
     await log(ctx, f"Поиск постов за последние {days} дней во всех каналах")
     from_dt = datetime.now() - timedelta(days=days)
     to_dt = datetime.now()
@@ -1114,6 +1204,8 @@ async def run_recent_all(ctx, days: int) -> bool:
     cfg = get_cfg(ctx)
     attempts_total = 0
     for c in cfg.channels:
+        if _norm_chan(c) in NO_ACCESS:
+            continue
         if ctx.chat_data.get("stop"):
             break
         await log(ctx, f"Читаю канал {c}")
@@ -1139,7 +1231,13 @@ async def run_recent_channel(ctx, chan: str, days: int) -> bool:
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start()
+    if _norm_chan(chan) in NO_ACCESS:
+        await ctx.bot.send_message(
+            ctx.chat_data["target_chat"],
+            "Бот не имеет доступа к этому каналу",
+        )
+        return True
+    await start_tg_client()
     await log(ctx, f"Поиск постов за последние {days} дней в {chan}")
     from_dt = datetime.now() - timedelta(days=days)
     to_dt = datetime.now()
@@ -1173,7 +1271,13 @@ async def run_channel(
     if chan not in cfg.channels:
         await ctx.bot.send_message(ctx.chat_data["target_chat"], "Канал не в списке.")
         return True
-    await tg_client.start()
+    if _norm_chan(chan) in NO_ACCESS:
+        await ctx.bot.send_message(
+            ctx.chat_data["target_chat"],
+            "Бот не имеет доступа к этому каналу",
+        )
+        return True
+    await start_tg_client()
     await log(ctx, f"Парсим {chan}")
     from_dt = datetime.strptime(from_d, "%d.%m.%Y") if from_d else None
     to_dt   = datetime.strptime(to_d, "%d.%m.%Y") if to_d else None
@@ -1196,13 +1300,33 @@ async def run_channel(
     ctx.user_data.clear()
     return msg not in {"Введите количество постов больше, бот ничего не нашёл", ATTEMPT_MSG}
 
+# -------------- error handler ------------------------------------------------
+async def on_error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    tb = html.escape(''.join(traceback.format_exception(None, context.error, context.error.__traceback__)))
+    if ADMIN_ID:
+        try:
+            await context.bot.send_message(ADMIN_ID, f"<pre>{tb}</pre>", parse_mode="HTML")
+        except Exception:
+            logging.exception("Failed to send error message")
+
 # ────────────── MAIN ───────────────────────────────────────────────────────
 def main():
+    # validate Telegram credentials once at startup to fail fast if incorrect
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:  # no current loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    loop.run_until_complete(verify_tg_credentials())
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
+    app.add_error_handler(on_error)
 
     print("Bot running…  (Ctrl+C to stop)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-if __name__ == "__main__":    main()
+
+if __name__ == "__main__":
+    main()

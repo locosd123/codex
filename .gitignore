@@ -1,0 +1,5 @@
+.env
+*.session
+processed_ids.json
+processed_ids.lock
+__pycache__/
