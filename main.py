@@ -371,6 +371,68 @@ def cleanup_temp_files(*files):
                             level=logging.WARNING)
 
 
+# --- Функция для локального LM Studio ---
+def call_lmstudio_with_retry(data_uri: str) -> str:
+    if stop_requested.is_set():
+        raise RuntimeError("Генерация LM Studio прервана пользователем перед запросом.")
+
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "model": LMSTUDIO_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            }
+        ],
+        "max_tokens": 1024,
+    }
+
+    last_exc = None
+    for attempt in range(LMSTUDIO_MAX_RETRIES):
+        try:
+            if stop_requested.is_set():
+                raise RuntimeError("Генерация LM Studio прервана пользователем перед запросом.")
+
+            log_message(
+                f"LM Studio: попытка {attempt + 1}/{LMSTUDIO_MAX_RETRIES} отправки запроса..."
+            )
+            resp = requests.post(LMSTUDIO_URL, headers=headers, json=payload, timeout=60)
+            if not resp.ok:
+                log_message(
+                    f"LM Studio: HTTP {resp.status_code}: {resp.text}",
+                    level=logging.ERROR,
+                )
+                resp.raise_for_status()
+            data = resp.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            if not content:
+                raise RuntimeError("LM Studio не вернул сообщение.")
+            log_message(
+                f"LM Studio: Получен промпт (длина {len(content)})."
+            )
+            return content
+        except Exception as e:
+            last_exc = e
+            log_message(
+                f"LM Studio: ошибка на попытке {attempt + 1}: {e}",
+                level=logging.ERROR,
+            )
+            time.sleep(2 * (attempt + 1))
+
+    raise RuntimeError(
+        f"LM Studio: не удалось получить промпт. Последняя ошибка: {last_exc}"
+    )
+
+
 # --- Функция для API Leonardo AI ---
 def call_leonardo_with_retry(prompt: str, leonardo_key: str):
     if stop_requested.is_set():
