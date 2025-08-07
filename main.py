@@ -150,12 +150,41 @@ async def log(ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     cfg = get_cfg(ctx)
     if cfg.log_enabled and ctx.chat_data.get("target_chat"):
         try:
-            await ctx.bot.send_message(ctx.chat_data["target_chat"], f"#log {text}")
+            await send_chunks(ctx.bot, ctx.chat_data["target_chat"], f"#log {text}")
         except Exception:
             logging.exception("Failed to send log message")
 
 
 # ────────────── UTIL: журнал постов ────────────────────────────────────────
+
+MAX_TEXT_LEN = 4096
+
+def split_text(text: str, limit: int = MAX_TEXT_LEN) -> list[str]:
+    parts: list[str] = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut == -1:
+            cut = limit
+        parts.append(text[:cut])
+        text = text[cut:]
+    parts.append(text)
+    return parts
+
+async def reply_chunks(msg, text: str, **kwargs) -> None:
+    parts = split_text(text)
+    for i, part in enumerate(parts):
+        if i == 0:
+            await msg.reply_text(part, **kwargs)
+        else:
+            await msg.reply_text(part)
+
+async def send_chunks(bot, chat_id, text: str, **kwargs) -> None:
+    parts = split_text(text)
+    for i, part in enumerate(parts):
+        if i == 0:
+            await bot.send_message(chat_id, part, **kwargs)
+        else:
+            await bot.send_message(chat_id, part)
 
 def build_filter_prompt(p_yes: str, p_no: str) -> str:
     return (
@@ -408,13 +437,11 @@ async def process_and_send(
     src = f"@{username}" if username and not username.lstrip("-").isdigit() else chan
     src = html.escape(src)
     link_attr = f" href='{html.escape(link)}'" if link else ""
-    body = (
-        f"<b>Источник:</b> <a{link_attr}>{src}</a>\n\n"
-        f"{rewritten}{footer}"
-    )[:4090]
-    await ctx.bot.send_message(
-        chat_id=ctx.chat_data["target_chat"],
-        text=body,
+    body = f"<b>Источник:</b> <a{link_attr}>{src}</a>\n\n{rewritten}{footer}"
+    await send_chunks(
+        ctx.bot,
+        ctx.chat_data["target_chat"],
+        body,
         parse_mode=tg_const.ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -709,15 +736,18 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if text == "📝 Заменить фильтр-промпт":
         ctx.user_data.clear()
         ctx.user_data["mode"] = "replace_prompt_yes"
-        await update.message.reply_text(
+        await reply_chunks(
+            update.message,
             "Вот текущий промпт:\n"
             "Отвечай только 'yes' или 'no'.\n"
             f"'Yes' — {cfg.prompt_yes}\n"
             f"'No' — {cfg.prompt_no}",
             reply_markup=CANCEL_KB,
         )
-        await update.message.reply_text(
-            "Введите промпт в случае если YES:", reply_markup=CANCEL_KB
+        await reply_chunks(
+            update.message,
+            "Введите промпт в случае если YES:",
+            reply_markup=CANCEL_KB,
         )
         return
     if text == "Отображать лог ?":
