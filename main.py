@@ -172,9 +172,10 @@ HELP_TEXT = (
     "4. Если ключевая фраза отсутствует в ответе, она вставляется случайно\n"
     "   в один из абзацев до конца текста.\n\n"
 
-    "5. Слайдер \"Количество потоков\" задаёт число одновременно выполняемых\n"
+    "5. Слайдер \"Количество потоков\" (только для OpenAI) задаёт число одновременно выполняемых\n"
     "   задач. Каждый ключ может использоваться максимум в 10 потоках,\n"
-    "   поэтому предел равен числу активных ключей × 10 (но не больше 200).\n\n"
+    "   поэтому предел равен числу активных ключей × 10 (но не больше 200). При использовании Gemini\n"
+    "   количество потоков равно числу доступных ключей и не изменяется пользователем.\n\n"
 
     "6. 'Статусы API Ключей' открывает таблицу со столбцами:\n"
     "   'Ключ (хвост)' — последние символы ключа;\n"
@@ -858,26 +859,26 @@ class TextGeneratorApp(ctk.CTkFrame):
         self.format_segmented_button = ctk.CTkSegmentedButton(format_frame, values=["TXT", "HTML"],
                                                               variable=self.output_format_var)
         self.format_segmented_button.pack(side="left", fill="x", expand=True)
-        threads_frame = ctk.CTkFrame(main_frame)
-        threads_frame.pack(pady=5, padx=10, fill="x")
-        ctk.CTkLabel(threads_frame, text="Количество потоков:").pack(side="left", padx=(0, 10))
-        self.threads_slider = ctk.CTkSlider(threads_frame, from_=1, to=MAX_THREADS,
+        self.threads_frame = ctk.CTkFrame(main_frame)
+        self.threads_frame.pack(pady=5, padx=10, fill="x")
+        ctk.CTkLabel(self.threads_frame, text="Количество потоков:").pack(side="left", padx=(0, 10))
+        self.threads_slider = ctk.CTkSlider(self.threads_frame, from_=1, to=MAX_THREADS,
                                             variable=self.num_threads_var, number_of_steps=MAX_THREADS - 1)
         self.threads_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.threads_label = ctk.CTkLabel(threads_frame, text=str(self.num_threads_var.get()))
+        self.threads_label = ctk.CTkLabel(self.threads_frame, text=str(self.num_threads_var.get()))
         self.threads_label.pack(side="left")
         self.num_threads_var.trace_add("write", self.update_threads_label)
-        action_frame = ctk.CTkFrame(main_frame)
-        action_frame.pack(pady=(10, 5), padx=10, fill="x")
-        self.start_button = ctk.CTkButton(action_frame, text="Начать генерацию", command=self.start_generation_thread)
+        self.action_frame = ctk.CTkFrame(main_frame)
+        self.action_frame.pack(pady=(10, 5), padx=10, fill="x")
+        self.start_button = ctk.CTkButton(self.action_frame, text="Начать генерацию", command=self.start_generation_thread)
         self.start_button.pack(side="left", padx=5)
-        self.stop_button = ctk.CTkButton(action_frame, text="Остановить", command=self.stop_generation,
+        self.stop_button = ctk.CTkButton(self.action_frame, text="Остановить", command=self.stop_generation,
                                          state="disabled")
         self.stop_button.pack(side="left", padx=5)
-        self.api_status_button = ctk.CTkButton(action_frame, text="Статусы API Ключей",
+        self.api_status_button = ctk.CTkButton(self.action_frame, text="Статусы API Ключей",
                                                command=self._open_api_key_status_window)
         self.api_status_button.pack(side="left", padx=10)
-        self.help_button = ctk.CTkButton(action_frame, text="!", width=30,
+        self.help_button = ctk.CTkButton(self.action_frame, text="!", width=30,
                                          command=self._open_help_window)
         self.help_button.pack(side="left")
         log_frame = ctk.CTkFrame(main_frame)
@@ -886,6 +887,7 @@ class TextGeneratorApp(ctk.CTkFrame):
         self.log_textbox = ctk.CTkTextbox(log_frame, state="disabled", height=150, wrap="word")
         self.log_textbox.pack(fill="both", expand=True)
         self._update_gemini_model_visibility()
+        self._update_threads_visibility()
         self.update_api_keys_from_textbox()
         self.after(LOG_FLUSH_INTERVAL_MS, self.flush_log_queue)
 
@@ -895,10 +897,16 @@ class TextGeneratorApp(ctk.CTkFrame):
             self.threads_label.configure(text=str(current_var_val))
         if hasattr(self, 'threads_slider') and self.threads_slider.winfo_exists():
             num_active_keys = self.api_key_queue.qsize()
-            if num_active_keys == 0:
-                s_max_logical_limit = max(1, current_var_val)
+            if self.api_provider_var.get() == "Gemini":
+                if num_active_keys == 0:
+                    s_max_logical_limit = max(1, current_var_val)
+                else:
+                    s_max_logical_limit = num_active_keys
             else:
-                s_max_logical_limit = min(MAX_THREADS, num_active_keys * PER_KEY_CONCURRENCY)
+                if num_active_keys == 0:
+                    s_max_logical_limit = max(1, current_var_val)
+                else:
+                    s_max_logical_limit = min(MAX_THREADS, num_active_keys * PER_KEY_CONCURRENCY)
             s_max_logical_limit = max(1, s_max_logical_limit)
             slider_from_value = 1
             slider_actual_to = slider_from_value + 1 if s_max_logical_limit == slider_from_value else s_max_logical_limit
@@ -958,6 +966,7 @@ class TextGeneratorApp(ctk.CTkFrame):
 
     def handle_provider_change(self, event=None):
         self._update_gemini_model_visibility()
+        self._update_threads_visibility()
         self.update_api_keys_from_textbox()
         self.save_settings()
 
@@ -966,6 +975,14 @@ class TextGeneratorApp(ctk.CTkFrame):
             self.gemini_model_combo.configure(state="normal")
         else:
             self.gemini_model_combo.configure(state="disabled")
+
+    def _update_threads_visibility(self):
+        if self.api_provider_var.get() == "Gemini":
+            if self.threads_frame.winfo_manager():
+                self.threads_frame.pack_forget()
+        else:
+            if not self.threads_frame.winfo_manager():
+                self.threads_frame.pack(pady=5, padx=10, fill="x", before=self.action_frame)
 
     def _get_selected_gemini_model(self):
         mapping = {
@@ -1304,7 +1321,10 @@ class TextGeneratorApp(ctk.CTkFrame):
     def _begin_generation_after_slot(self):
         with self.api_key_queue.mutex:
             active_keys = set(self.api_key_queue.queue)
-        target_threads = min(MAX_THREADS, len(active_keys) * PER_KEY_CONCURRENCY)
+        if self.api_provider_var.get() == "Gemini":
+            target_threads = len(active_keys)
+        else:
+            target_threads = min(MAX_THREADS, len(active_keys) * PER_KEY_CONCURRENCY)
         self.num_threads_var.set(target_threads)
         self.update_threads_label()
         self.output_file_counter = self._ensure_output_file_count(force=True)
