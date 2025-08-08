@@ -84,9 +84,13 @@ MAX_TOC_TOTAL_CHARS = 2000
 # Минимальный интервал между запросами одним и тем же API ключом (секунды)
 PER_KEY_CALL_INTERVAL = 0.05
 # Дополнительные интервалы ожидания для моделей Gemini (в секундах)
+# Значения обеспечивают соблюдение лимитов запросов в минуту на один ключ:
+# - gemini-2.5-pro: 5 запросов/мин (интервал 12с)
+# - gemini-2.5-flash и gemini-2.5-flash-lite: 10 запросов/мин (интервал 6с)
 GEMINI_MODEL_COOLDOWNS = {
-    "gemini-2.5-pro": 65.0,
-    "gemini-2.5-flash": 65.0,
+    "gemini-2.5-pro": 12.0,
+    "gemini-2.5-flash": 6.0,
+    "gemini-2.5-flash-lite": 6.0,
 }
 # НОВОВВЕДЕНИЕ: Имя файла для статусов API ключей и мьютекс для доступа к нему
 API_KEY_STATUSES_FILE = "api_key_statuses.json"  # НОВОВВЕДЕНИЕ
