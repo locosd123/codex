@@ -83,13 +83,17 @@ MAX_TOC_ITEM_CHARS = 200
 MAX_TOC_TOTAL_CHARS = 2000
 # Минимальный интервал между запросами одним и тем же API ключом (секунды)
 PER_KEY_CALL_INTERVAL = 0.05
-# Ограничения для моделей Gemini: количество запросов за интервал и длительность интервала (секунды)
+# Ограничения для моделей Gemini
+# GEMINI_RPM_LIMITS – справочная информация о лимитах запросов в минуту
+# GEMINI_RATE_LIMIT_INTERVAL – фактический интервал между вызовами для одного ключа
+# GEMINI_THREAD_MULTIPLIER – количество потоков на ключ (фиксировано 1)
 GEMINI_RATE_LIMIT_INTERVAL = 65.0  # 65 секунд ~ 1 минута с запасом
-GEMINI_MODEL_REQUEST_LIMITS = {
+GEMINI_RPM_LIMITS = {
     "gemini-2.5-pro": 5,
     "gemini-2.5-flash": 10,
     "gemini-2.5-flash-lite": 10,
 }
+GEMINI_THREAD_MULTIPLIER = 1
 # НОВОВВЕДЕНИЕ: Имя файла для статусов API ключей и мьютекс для доступа к нему
 API_KEY_STATUSES_FILE = "api_key_statuses.json"  # НОВОВВЕДЕНИЕ
 
@@ -102,8 +106,6 @@ BAD_API_KEYS_CACHE_LOCK = threading.Lock()
 # Храним время последнего запроса к API для каждого ключа
 api_key_last_call_time = {}
 api_key_last_call_time_lock = threading.Lock()
-# Для Gemini храним информацию о количестве использований ключа и времени сброса лимита
-gemini_key_usage = {}
 
 # Global API key statuses shared across all project windows
 GLOBAL_API_KEY_STATUSES = None
@@ -179,8 +181,7 @@ HELP_TEXT = (
     "5. Слайдер \"Количество потоков\" (только для OpenAI) задаёт число одновременно выполняемых\n"
     "   задач. Каждый ключ может использоваться максимум в 10 потоках,\n"
     "   поэтому предел равен числу активных ключей × 10 (но не больше 200). При использовании Gemini\n"
-    "   количество потоков фиксировано и равно числу ключей, умноженному на лимит модели\n"
-    "   (10 для Flash/Flash-Lite, 5 для Pro). Пользователь не может изменить это значение.\n\n"
+    "   количество потоков равно числу ключей и не может быть изменено пользователем.\n\n"
 
     "6. 'Статусы API Ключей' открывает таблицу со столбцами:\n"
     "   'Ключ (хвост)' — последние символы ключа;\n"
@@ -665,19 +666,24 @@ class TextGeneratorApp(ctk.CTkFrame):
         new_queue = Queue()
         active_keys_for_queue = []
         with self.api_key_statuses_lock:
+            gemini_model = self._get_selected_gemini_model() if self.api_provider_var.get() == "Gemini" else None
+            gemini_limit = GEMINI_RPM_LIMITS.get(gemini_model) if gemini_model else None
             for key_str in current_master_keys:
                 status_data = self.api_key_statuses.get(key_str)
-                if status_data and status_data.get("status") == "active":
-                    active_keys_for_queue.append(key_str)
-                elif not status_data:
-                    self.api_key_statuses[key_str] = self._get_default_api_key_status()
+                if not status_data:
+                    status_data = self._get_default_api_key_status()
+                if gemini_limit is not None:
+                    status_data["limit_requests"] = gemini_limit
+                    if status_data.get("remaining_requests") is None or status_data["remaining_requests"] > gemini_limit:
+                        status_data["remaining_requests"] = gemini_limit
+                self.api_key_statuses[key_str] = status_data
+                if status_data.get("status") == "active":
                     active_keys_for_queue.append(key_str)
         if active_keys_for_queue:
             random.shuffle(active_keys_for_queue)
             per_key_entries = PER_KEY_CONCURRENCY
             if self.api_provider_var.get() == "Gemini":
-                model = self._get_selected_gemini_model()
-                per_key_entries = GEMINI_MODEL_REQUEST_LIMITS.get(model, 1)
+                per_key_entries = GEMINI_THREAD_MULTIPLIER
             for key_str in active_keys_for_queue:
                 for _ in range(per_key_entries):
                     new_queue.put(key_str)
@@ -690,8 +696,8 @@ class TextGeneratorApp(ctk.CTkFrame):
         self.api_key_queue = new_queue
         self.update_threads_label()
 
-    def _acquire_api_key_with_cooldown(self, required_interval, per_interval_limit=1):
-        """Возвращает API ключ, который можно использовать с учетом лимита запросов."""
+    def _acquire_api_key_with_cooldown(self, required_interval):
+        """Возвращает API ключ, учитывая минимальный интервал между запросами."""
         while True:
             wait_times = []
             qsize = self.api_key_queue.qsize()
@@ -701,24 +707,13 @@ class TextGeneratorApp(ctk.CTkFrame):
                 except Empty:
                     return None
                 now = time.time()
-                if per_interval_limit > 1:
-                    with api_key_last_call_time_lock:
-                        usage = gemini_key_usage.setdefault(key, {"reset": 0.0, "remaining": per_interval_limit})
-                        if now >= usage["reset"]:
-                            usage["remaining"] = per_interval_limit
-                            usage["reset"] = now + required_interval
-                        if usage["remaining"] > 0:
-                            usage["remaining"] -= 1
-                            return key
-                        wait_times.append(max(0.0, usage["reset"] - now))
-                else:
-                    with api_key_last_call_time_lock:
-                        last_ts = api_key_last_call_time.get(key, 0.0)
-                        elapsed = now - last_ts
-                        if elapsed >= required_interval:
-                            api_key_last_call_time[key] = now
-                            return key
-                        wait_times.append(required_interval - elapsed)
+                with api_key_last_call_time_lock:
+                    last_ts = api_key_last_call_time.get(key, 0.0)
+                    elapsed = now - last_ts
+                    if elapsed >= required_interval:
+                        api_key_last_call_time[key] = now
+                        return key
+                    wait_times.append(required_interval - elapsed)
                 self.api_key_queue.put(key)
             if wait_times:
                 time.sleep(min(wait_times))
@@ -922,7 +917,7 @@ class TextGeneratorApp(ctk.CTkFrame):
             with self.api_key_queue.mutex:
                 num_active_keys = len(set(self.api_key_queue.queue))
             if self.api_provider_var.get() == "Gemini":
-                per_key_limit = GEMINI_MODEL_REQUEST_LIMITS.get(self._get_selected_gemini_model(), 1)
+                per_key_limit = GEMINI_THREAD_MULTIPLIER
                 if num_active_keys == 0:
                     s_max_logical_limit = max(1, current_var_val)
                 else:
@@ -1183,7 +1178,6 @@ class TextGeneratorApp(ctk.CTkFrame):
         with api_key_last_call_time_lock:
             for key_to_remove in removed_keys:
                 api_key_last_call_time.pop(key_to_remove, None)
-                gemini_key_usage.pop(key_to_remove, None)
         if added_keys or removed_keys:
             self._save_api_key_statuses()
             try:
@@ -1360,8 +1354,7 @@ class TextGeneratorApp(ctk.CTkFrame):
         with self.api_key_queue.mutex:
             active_keys = set(self.api_key_queue.queue)
         if self.api_provider_var.get() == "Gemini":
-            limit = GEMINI_MODEL_REQUEST_LIMITS.get(self._get_selected_gemini_model(), 1)
-            target_threads = len(active_keys) * limit
+            target_threads = len(active_keys) * GEMINI_THREAD_MULTIPLIER
         else:
             target_threads = min(MAX_THREADS, len(active_keys) * PER_KEY_CONCURRENCY)
         self.num_threads_var.set(target_threads)
@@ -1606,6 +1599,21 @@ class TextGeneratorApp(ctk.CTkFrame):
                 self.log_message(f"Gemini API ошибка: {e}. Попытка {attempt + 1}/{retries}.", log_level)
                 if status in (401, 403):
                     return "INVALID_API_KEY_ERROR"
+                if status == 429:
+                    retry_delay = GEMINI_RATE_LIMIT_INTERVAL
+                    server_delay = getattr(getattr(e, "retry_delay", None), "seconds", None)
+                    try:
+                        if server_delay is not None:
+                            retry_delay = max(retry_delay, float(server_delay))
+                    except Exception:
+                        pass
+                    with api_key_last_call_time_lock:
+                        api_key_last_call_time[api_key_used_for_call] = time.time()
+                    if attempt + 1 < retries:
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        return None
                 current_delay = delay_seconds * (2 ** attempt)
                 if attempt + 1 < retries:
                     time.sleep(current_delay)
@@ -1758,12 +1766,10 @@ class TextGeneratorApp(ctk.CTkFrame):
 
         try:
             cooldown_required = PER_KEY_CALL_INTERVAL
-            per_interval_limit = 1
             if api_provider == "Gemini":
                 gemini_model_name = self._get_selected_gemini_model()
                 cooldown_required = GEMINI_RATE_LIMIT_INTERVAL
-                per_interval_limit = GEMINI_MODEL_REQUEST_LIMITS.get(gemini_model_name, 1)
-            retrieved_api_key_str = self._acquire_api_key_with_cooldown(cooldown_required, per_interval_limit)
+            retrieved_api_key_str = self._acquire_api_key_with_cooldown(cooldown_required)
             if not retrieved_api_key_str:
                 raise Empty
             with self.api_stats_lock:
