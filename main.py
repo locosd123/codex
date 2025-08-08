@@ -83,6 +83,11 @@ MAX_TOC_ITEM_CHARS = 200
 MAX_TOC_TOTAL_CHARS = 2000
 # Минимальный интервал между запросами одним и тем же API ключом (секунды)
 PER_KEY_CALL_INTERVAL = 0.05
+# Дополнительные интервалы ожидания для моделей Gemini (в секундах)
+GEMINI_MODEL_COOLDOWNS = {
+    "gemini-2.5-pro": 65.0,
+    "gemini-2.5-flash": 65.0,
+}
 # НОВОВВЕДЕНИЕ: Имя файла для статусов API ключей и мьютекс для доступа к нему
 API_KEY_STATUSES_FILE = "api_key_statuses.json"  # НОВОВВЕДЕНИЕ
 
@@ -673,6 +678,26 @@ class TextGeneratorApp(ctk.CTkFrame):
             self.log_message("Нет активных API ключей для добавления в очередь.", "WARNING")
         self.api_key_queue = new_queue
         self.update_threads_label()
+
+    def _acquire_api_key_with_cooldown(self, required_interval):
+        """Возвращает API ключ, для которого истёк интервал ожидания."""
+        while True:
+            wait_times = []
+            qsize = self.api_key_queue.qsize()
+            for _ in range(max(1, qsize)):
+                try:
+                    key = self.api_key_queue.get(block=True, timeout=20)
+                except Empty:
+                    return None
+                with api_key_last_call_time_lock:
+                    last_ts = api_key_last_call_time.get(key, 0.0)
+                elapsed = time.time() - last_ts
+                if elapsed >= required_interval:
+                    return key
+                wait_times.append(required_interval - elapsed)
+                self.api_key_queue.put(key)
+            if wait_times:
+                time.sleep(min(wait_times))
 
     def _parse_ratelimit_reset_time(self, reset_value_str):
         if not reset_value_str: return None
@@ -1505,13 +1530,14 @@ class TextGeneratorApp(ctk.CTkFrame):
 
     def call_gemini_api(self, model_name, messages, api_key_used_for_call, retries=3, delay_seconds=0.5):
         prompt = "\n".join([m.get("content", "") for m in messages])
+        cooldown = GEMINI_MODEL_COOLDOWNS.get(model_name, PER_KEY_CALL_INTERVAL)
         for attempt in range(retries):
             if self.stop_event.is_set():
                 self.log_message("API вызов прерван сигналом остановки.", "WARNING")
                 return None
             with api_key_last_call_time_lock:
                 last_ts = api_key_last_call_time.get(api_key_used_for_call, 0.0)
-            to_wait = PER_KEY_CALL_INTERVAL - (time.time() - last_ts)
+            to_wait = cooldown - (time.time() - last_ts)
             if to_wait > 0:
                 time.sleep(to_wait)
             try:
@@ -1678,10 +1704,16 @@ class TextGeneratorApp(ctk.CTkFrame):
         link_inserted_flag = False
 
         try:
-            retrieved_api_key_str = self.api_key_queue.get(block=True, timeout=20)
+            cooldown_required = PER_KEY_CALL_INTERVAL
+            if api_provider == "Gemini":
+                gemini_model_name = self._get_selected_gemini_model()
+                cooldown_required = GEMINI_MODEL_COOLDOWNS.get(gemini_model_name, PER_KEY_CALL_INTERVAL)
+            retrieved_api_key_str = self._acquire_api_key_with_cooldown(cooldown_required)
+            if not retrieved_api_key_str:
+                raise Empty
             with self.api_stats_lock:
                 self.api_key_usage_stats[retrieved_api_key_str] = self.api_key_usage_stats.get(retrieved_api_key_str,
-                                                                                               0) + 1
+                                                                                              0) + 1
             key_short_display = f"...{retrieved_api_key_str[-5:]}" if len(
                 retrieved_api_key_str) > 5 else retrieved_api_key_str
             log_prefix = f"[{task_id} ({task_num_for_keyword}/{total_tasks_for_keyword} для '{keyword_phrase}', {selected_lang}, ключ {key_short_display}), Общая {global_task_num}/{total_global_tasks}]"
@@ -1689,7 +1721,6 @@ class TextGeneratorApp(ctk.CTkFrame):
                 openai_client = OpenAI(api_key=retrieved_api_key_str, timeout=30.0, max_retries=0)
                 if openai_client is None: raise ValueError("Клиент OpenAI не был инициализирован.")
             else:
-                gemini_model_name = self._get_selected_gemini_model()
                 genai.configure(api_key=retrieved_api_key_str)
         except Empty:
             self.log_message(f"{log_prefix_base} Ошибка: Таймаут получения API ключа из очереди.", "ERROR")
